@@ -456,9 +456,16 @@ def _unavailable_spatial_evidence(reason_code: str) -> SpatialDifferenceEvidence
     return SpatialDifferenceEvidence(state="UNAVAILABLE", disclaimerCode="DIFFERENCE_NOT_DEFECT_PROOF", reasonCode=reason_code)
 
 
+def _overlaps(left: float, top: float, width: float, height: float, region) -> bool:
+    return (
+        left < region.x + region.width and region.x < left + width
+        and top < region.y + region.height and region.y < top + height
+    )
+
+
 def _spatial_difference_evidence(
     patches: PatchEmbedding, golden: GoldenEmbedding, policy: SpatialDifferencePolicy | None,
-    canonical_width: int, canonical_height: int,
+    canonical_width: int, canonical_height: int, inspection_regions=(),
 ) -> SpatialDifferenceEvidence:
     if policy is None:
         return _unavailable_spatial_evidence("SPATIAL_DIFFERENCE_POLICY_NOT_CONFIGURED")
@@ -506,16 +513,25 @@ def _spatial_difference_evidence(
         component_values = upscaled[labels == label]
         peak = float(np.clip(component_values.max() / 2.0, 0.0, 1.0))
         mean = float(np.clip(component_values.mean() / 2.0, 0.0, 1.0))
-        candidates.append((area, x, y, w, h, peak, mean))
-    candidates.sort(key=lambda item: item[0], reverse=True)
-    regions: list[DifferenceRegion] = []
-    for index, (_, x, y, w, h, peak, mean) in enumerate(candidates[: policy.max_regions]):
         # Component bbox is in DINO_INPUT_SIZE pixel space; project through the
-        # crop box into canonical-ROI normalized coordinates.
+        # crop box into canonical-ROI pixel coordinates immediately so the
+        # inspection-region filter and the reported bbox use the same values.
         canon_x = left + (x / DINO_INPUT_SIZE) * crop_width
         canon_y = top + (y / DINO_INPUT_SIZE) * crop_height
         canon_w = (w / DINO_INPUT_SIZE) * crop_width
         canon_h = (h / DINO_INPUT_SIZE) * crop_height
+        candidates.append((area, canon_x, canon_y, canon_w, canon_h, peak, mean))
+    # A difference driven by a stable alignment/held-out landmark (not the
+    # inspected content) is not evidence about the equipment; only report
+    # components that actually overlap a declared inspection region.
+    if inspection_regions:
+        candidates = [
+            candidate for candidate in candidates
+            if any(_overlaps(candidate[1], candidate[2], candidate[3], candidate[4], region) for region in inspection_regions)
+        ]
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    regions: list[DifferenceRegion] = []
+    for index, (_, canon_x, canon_y, canon_w, canon_h, peak, mean) in enumerate(candidates[: policy.max_regions]):
         x_norm = canon_x / canonical_width
         y_norm = canon_y / canonical_height
         width_norm = min(canon_w / canonical_width, 1.0 - x_norm)
@@ -676,6 +692,7 @@ class ProductionAnalyzer:
             spatial_evidence = _spatial_difference_evidence(
                 patches, nearest_golden, self._artifact.spatial_difference_policy,
                 self._artifact.target_alignment.canonical_width, self._artifact.target_alignment.canonical_height,
+                self._artifact.target_alignment.inspection_regions,
             )
         else:
             spatial_evidence = _unavailable_spatial_evidence("PATCH_EMBEDDER_NOT_AVAILABLE")

@@ -159,6 +159,27 @@ class TestSpatialDifferenceEvidenceFunction:
             assert region.bbox_normalized.x + region.bbox_normalized.width <= region_box.x + region_box.width + 1e-6
             assert region.bbox_normalized.y + region.bbox_normalized.height <= region_box.y + region_box.height + 1e-6
 
+    def test_regions_outside_every_inspection_region_are_dropped(self):
+        from phone_dino.artifacts import ImageRegion
+
+        # DIFFERENT_GRID's difference lands in the bottom half of the analyzed crop.
+        embedder = GridPatchEmbedder(DIFFERENT_GRID)
+        patches = embedder.embed_with_patches(None)
+        golden = _golden(patch_values=IDENTICAL_GRID, grid_h=2, grid_w=2)
+        canonical_width, canonical_height = 320, 240
+
+        excluding = [ImageRegion(x=0, y=0, width=320, height=50)]
+        dropped = _spatial_difference_evidence(patches, golden, POLICY, canonical_width, canonical_height, excluding)
+        assert dropped.regions == []
+
+        covering = [ImageRegion(x=0, y=150, width=320, height=90)]
+        kept = _spatial_difference_evidence(patches, golden, POLICY, canonical_width, canonical_height, covering)
+        assert len(kept.regions) >= 1
+
+        # No inspection regions supplied at all preserves the unfiltered behaviour.
+        unfiltered = _spatial_difference_evidence(patches, golden, POLICY, canonical_width, canonical_height, [])
+        assert len(unfiltered.regions) == len(kept.regions)
+
     def test_max_regions_is_enforced(self):
         # A checkerboard-like grid maximizes distinct connected components.
         big = 8
