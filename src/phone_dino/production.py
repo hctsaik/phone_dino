@@ -11,15 +11,22 @@ from typing import Protocol
 from PIL import Image, ImageOps
 
 from .analyzer import RUNTIME_DIGEST
-from .artifacts import ArtifactError, ProductionArtifact, ProductionArtifactV12, load_artifact, require_inspection_roi, verify_artifact_binding
+from .artifacts import (
+    ArtifactError, GoldenEmbedding, ProductionArtifact, ProductionArtifactV12, SpatialDifferencePolicy,
+    load_artifact, require_inspection_roi, verify_artifact_binding,
+)
 from .config import Settings
 from .contracts import (
     AnalysisObservation, AnalysisState, AnalyzeObservation, AnalyzeRequest,
-    AlignmentObservation, CaptureAssessment, CaptureState, NormalizationObservation, ResolvedVersions,
+    AlignmentObservation, BboxNormalized, CaptureAssessment, CaptureState, DifferenceRegion,
+    NormalizationObservation, ResolvedVersions, SpatialDifferenceEvidence,
 )
 from .decoder import DecodedImage
 from .engines import LocalDinoV2Adapter
 from .security import digest_directory
+
+DINO_INPUT_SIZE = 224
+DINO_RESIZE_SHORT_EDGE = 256
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +49,25 @@ class Normalizer(Protocol):
 
 class Embedder(Protocol):
     def embed(self, rgb: object) -> list[float]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class PatchEmbedding:
+    global_vector: list[float]
+    patch_grid: list[list[float]]
+    grid_height: int
+    grid_width: int
+
+
+class PatchEmbedder(Protocol):
+    """Optional capability: an Embedder that can also return patch tokens.
+
+    Kept separate from Embedder so every existing stub/fixture embedder used
+    by contract and synthetic tests keeps working unchanged; only a real
+    PatchEmbedder unlocks spatialDifferenceEvidence.
+    """
+
+    def embed_with_patches(self, rgb: object) -> PatchEmbedding: ...
 
 
 class TargetAligner(Protocol):
@@ -343,28 +369,61 @@ class OpenCvCharucoNormalizer:
 
 
 class DinoV2Embedder:
-    def __init__(self, adapter: LocalDinoV2Adapter):
+    def __init__(self, adapter: LocalDinoV2Adapter, device: str = "cpu"):
         self._adapter = adapter
+        self._device = device
         self._model: object | None = None
         self._lock = Lock()
 
-    def embed(self, rgb: object) -> list[float]:
+    def warm_up(self) -> None:
+        """Load weights into memory ahead of the first request."""
+        with self._lock:
+            if self._model is None:
+                self._model = self._adapter.smoke_load().to(self._device)
+
+    def _transform(self, rgb: object) -> object:
         import numpy as np
         import torch
         from torchvision.transforms import v2
 
+        pil = Image.fromarray(np.asarray(rgb, dtype=np.uint8), mode="RGB")
+        return v2.Compose([
+            v2.Resize(DINO_RESIZE_SHORT_EDGE, antialias=True), v2.CenterCrop(DINO_INPUT_SIZE), v2.ToImage(),
+            v2.ToDtype(torch.float32, scale=True),
+            v2.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+        ])(pil).unsqueeze(0).to(self._device)
+
+    def embed(self, rgb: object) -> list[float]:
+        import torch
+
         with self._lock:
             if self._model is None:
-                self._model = self._adapter.smoke_load()
-            pil = Image.fromarray(np.asarray(rgb, dtype=np.uint8), mode="RGB")
-            tensor = v2.Compose([
-                v2.Resize(256, antialias=True), v2.CenterCrop(224), v2.ToImage(),
-                v2.ToDtype(torch.float32, scale=True),
-                v2.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
-            ])(pil).unsqueeze(0)
+                self._model = self._adapter.smoke_load().to(self._device)
+            tensor = self._transform(rgb)
             with torch.inference_mode():
                 value = self._model(tensor).detach().cpu().reshape(-1)
         return [float(item) for item in value]
+
+    def embed_with_patches(self, rgb: object) -> PatchEmbedding:
+        import torch
+
+        with self._lock:
+            if self._model is None:
+                self._model = self._adapter.smoke_load().to(self._device)
+            tensor = self._transform(rgb)
+            with torch.inference_mode():
+                features = self._model.forward_features(tensor)
+                cls = features["x_norm_clstoken"].detach().cpu().reshape(-1)
+                patches = features["x_norm_patchtokens"].detach().cpu()[0]
+        patch_size = getattr(self._model, "patch_size", 14)
+        grid = DINO_INPUT_SIZE // patch_size
+        if patches.shape[0] != grid * grid:
+            raise RuntimeError("DINO_PATCH_GRID_UNEXPECTED")
+        return PatchEmbedding(
+            global_vector=[float(item) for item in cls],
+            patch_grid=[[float(item) for item in row] for row in patches],
+            grid_height=grid, grid_width=grid,
+        )
 
 
 def _cosine_distance(left: list[float], right: list[float]) -> float:
@@ -378,15 +437,138 @@ def _cosine_distance(left: list[float], right: list[float]) -> float:
     return max(0.0, min(2.0, 1.0 - similarity))
 
 
+def _dino_input_crop_box(canonical_width: int, canonical_height: int) -> tuple[float, float, float, float]:
+    """Canonical-pixel (left, top, width, height) that Resize+CenterCrop feeds the model.
+
+    Mirrors torchvision v2.Resize(256) [shorter edge] + v2.CenterCrop(224) exactly, so
+    spatial evidence never claims coverage of canonical-ROI pixels the model never saw.
+    """
+    scale = DINO_RESIZE_SHORT_EDGE / min(canonical_width, canonical_height)
+    resized_width, resized_height = canonical_width * scale, canonical_height * scale
+    left = max(0.0, (resized_width - DINO_INPUT_SIZE) / 2.0) / scale
+    top = max(0.0, (resized_height - DINO_INPUT_SIZE) / 2.0) / scale
+    width = min(canonical_width - left, DINO_INPUT_SIZE / scale)
+    height = min(canonical_height - top, DINO_INPUT_SIZE / scale)
+    return left, top, width, height
+
+
+def _unavailable_spatial_evidence(reason_code: str) -> SpatialDifferenceEvidence:
+    return SpatialDifferenceEvidence(state="UNAVAILABLE", disclaimerCode="DIFFERENCE_NOT_DEFECT_PROOF", reasonCode=reason_code)
+
+
+def _spatial_difference_evidence(
+    patches: PatchEmbedding, golden: GoldenEmbedding, policy: SpatialDifferencePolicy | None,
+    canonical_width: int, canonical_height: int,
+) -> SpatialDifferenceEvidence:
+    if policy is None:
+        return _unavailable_spatial_evidence("SPATIAL_DIFFERENCE_POLICY_NOT_CONFIGURED")
+    if golden.patch_values is None or golden.patch_grid_height != patches.grid_height or golden.patch_grid_width != patches.grid_width:
+        return _unavailable_spatial_evidence("GOLDEN_PATCH_FEATURES_UNAVAILABLE")
+
+    import cv2
+    import numpy as np
+
+    current = np.asarray(patches.patch_grid, dtype=np.float64)
+    golden_patches = np.asarray(golden.patch_values, dtype=np.float64)
+    current_norm = np.linalg.norm(current, axis=1)
+    golden_norm = np.linalg.norm(golden_patches, axis=1)
+    valid = (current_norm > 1e-12) & (golden_norm > 1e-12)
+    similarity = np.zeros(current.shape[0], dtype=np.float64)
+    similarity[valid] = np.sum(current[valid] * golden_patches[valid], axis=1) / (current_norm[valid] * golden_norm[valid])
+    distance = np.clip(1.0 - similarity, 0.0, 2.0)
+    distance[~valid] = 0.0
+    grid = distance.reshape(patches.grid_height, patches.grid_width).astype(np.float32)
+
+    # Upscale the coarse patch grid to the exact pixel footprint DINO analyzed
+    # (DINO_INPUT_SIZE x DINO_INPUT_SIZE), never to the full canonical ROI.
+    upscaled = cv2.resize(grid, (DINO_INPUT_SIZE, DINO_INPUT_SIZE), interpolation=cv2.INTER_LINEAR)
+    display = np.clip(upscaled / 2.0, 0.0, 1.0)
+    heatmap_color = cv2.applyColorMap((display * 255).astype(np.uint8), cv2.COLORMAP_TURBO)
+    ok, map_encoded = cv2.imencode(".png", heatmap_color)
+    if not ok:
+        raise RuntimeError("SPATIAL_MAP_ENCODING_FAILED")
+
+    binary = (upscaled >= policy.anomaly_distance_threshold).astype(np.uint8) * 255
+    ok, mask_encoded = cv2.imencode(".png", binary)
+    if not ok:
+        raise RuntimeError("SPATIAL_MASK_ENCODING_FAILED")
+
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats((binary > 0).astype(np.uint8), connectivity=8)
+    min_area = policy.min_region_area_ratio * DINO_INPUT_SIZE * DINO_INPUT_SIZE
+    left, top, crop_width, crop_height = _dino_input_crop_box(canonical_width, canonical_height)
+    candidates: list[tuple[float, int, int, int, int, float, float]] = []
+    for label in range(1, num_labels):
+        area = float(stats[label, cv2.CC_STAT_AREA])
+        if area < min_area:
+            continue
+        x, y = int(stats[label, cv2.CC_STAT_LEFT]), int(stats[label, cv2.CC_STAT_TOP])
+        w, h = int(stats[label, cv2.CC_STAT_WIDTH]), int(stats[label, cv2.CC_STAT_HEIGHT])
+        component_values = upscaled[labels == label]
+        peak = float(np.clip(component_values.max() / 2.0, 0.0, 1.0))
+        mean = float(np.clip(component_values.mean() / 2.0, 0.0, 1.0))
+        candidates.append((area, x, y, w, h, peak, mean))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    regions: list[DifferenceRegion] = []
+    for index, (_, x, y, w, h, peak, mean) in enumerate(candidates[: policy.max_regions]):
+        # Component bbox is in DINO_INPUT_SIZE pixel space; project through the
+        # crop box into canonical-ROI normalized coordinates.
+        canon_x = left + (x / DINO_INPUT_SIZE) * crop_width
+        canon_y = top + (y / DINO_INPUT_SIZE) * crop_height
+        canon_w = (w / DINO_INPUT_SIZE) * crop_width
+        canon_h = (h / DINO_INPUT_SIZE) * crop_height
+        x_norm = canon_x / canonical_width
+        y_norm = canon_y / canonical_height
+        width_norm = min(canon_w / canonical_width, 1.0 - x_norm)
+        height_norm = min(canon_h / canonical_height, 1.0 - y_norm)
+        regions.append(DifferenceRegion(
+            id=f"D-{index + 1:03d}",
+            bboxNormalized=BboxNormalized(x=max(0.0, x_norm), y=max(0.0, y_norm), width=max(1e-6, width_norm), height=max(1e-6, height_norm)),
+            peakScore=peak, meanScore=mean,
+        ))
+
+    map_bytes = map_encoded.tobytes()
+    mask_bytes = mask_encoded.tobytes()
+    evidence_x_norm = left / canonical_width
+    evidence_y_norm = top / canonical_height
+    return SpatialDifferenceEvidence(
+        state="AVAILABLE", disclaimerCode="DIFFERENCE_NOT_DEFECT_PROOF", generationMethod="PATCH_DISTANCE",
+        evidenceRegionNormalized=BboxNormalized(
+            x=max(0.0, evidence_x_norm), y=max(0.0, evidence_y_norm),
+            width=min(crop_width / canonical_width, 1.0 - evidence_x_norm),
+            height=min(crop_height / canonical_height, 1.0 - evidence_y_norm),
+        ),
+        regions=regions,
+        mapPngBase64=base64.b64encode(map_bytes).decode("ascii"),
+        maskPngBase64=base64.b64encode(mask_bytes).decode("ascii"),
+        mapSha256=hashlib.sha256(map_bytes).hexdigest(),
+        maskSha256=hashlib.sha256(mask_bytes).hexdigest(),
+    )
+
+
 class ProductionAnalyzer:
     def __init__(self, settings: Settings, normalizer: Normalizer | None = None, embedder: Embedder | None = None):
         self.settings = settings
         self.adapter = LocalDinoV2Adapter(settings.model_repo, settings.model_weights)
         self.normalizer = normalizer or OpenCvCharucoNormalizer(allow_target_only_alignment=settings.allow_target_only_alignment)
-        self.embedder = embedder or DinoV2Embedder(self.adapter)
+        self.embedder = embedder or DinoV2Embedder(self.adapter, device=settings.device)
         self._artifact: ProductionArtifact | None = None
+        # Readiness re-verifies digests over an 88MB weights file and the full
+        # vendored model repository tree; both are immutable, read-only mounts
+        # in production (see docs/phone_dino_service_development_plan.md §12),
+        # so a *positive* result is cached for the process lifetime instead of
+        # re-hashing hundreds of MB on every request. A negative result is
+        # never cached, so a not-yet-mounted artifact keeps being re-checked.
+        self._readiness_cache: tuple[bool, str | None] | None = None
 
     def readiness(self) -> tuple[bool, str | None]:
+        if self._readiness_cache is not None:
+            return self._readiness_cache
+        result = self._check_readiness()
+        if result[0]:
+            self._readiness_cache = result
+        return result
+
+    def _check_readiness(self) -> tuple[bool, str | None]:
         if self.settings.artifact_manifest is None or not self.settings.artifact_manifest.is_file():
             return False, "ARTIFACT_MANIFEST_NOT_AVAILABLE"
         if self.settings.artifact_package_digest is None:
@@ -428,6 +610,17 @@ class ProductionAnalyzer:
             return False, "PRODUCTION_DEPENDENCY_NOT_AVAILABLE"
         return True, None
 
+    def warm_up(self) -> tuple[bool, str | None]:
+        """Pay artifact-verification and model-load cost once, before traffic arrives."""
+        ready, reason = self.readiness()
+        if ready and isinstance(self.embedder, DinoV2Embedder):
+            try:
+                self.embedder.warm_up()
+            except (RuntimeError, OSError) as exc:
+                self._readiness_cache = None
+                return False, f"MODEL_WARM_UP_FAILED:{exc}"
+        return ready, reason
+
     def analyze(self, request: AnalyzeRequest, image: DecodedImage) -> AnalyzeObservation:
         ready, reason = self.readiness()
         if not ready or self._artifact is None:
@@ -468,11 +661,24 @@ class ProductionAnalyzer:
                 normalization=None if alignment is None else NormalizationObservation(alignment=alignment),
                 analysis=AnalysisObservation(state=AnalysisState.NOT_RUN),
             )
-        embedding = self.embedder.embed(normalized.rgb)
+        patches: PatchEmbedding | None = None
+        if hasattr(self.embedder, "embed_with_patches"):
+            patches = self.embedder.embed_with_patches(normalized.rgb)  # type: ignore[union-attr]
+            embedding = patches.global_vector
+        else:
+            embedding = self.embedder.embed(normalized.rgb)
         distances = [(item.id, _cosine_distance(embedding, item.values)) for item in self._artifact.golden_embeddings]
         nearest_id, nearest = min(distances, key=lambda item: item[1])
+        nearest_golden = next(item for item in self._artifact.golden_embeddings if item.id == nearest_id)
         mean = sum(value for _, value in distances) / len(distances)
         uncertainty = min(1.0, max(0.0, max(value for _, value in distances) - min(value for _, value in distances)))
+        if patches is not None:
+            spatial_evidence = _spatial_difference_evidence(
+                patches, nearest_golden, self._artifact.spatial_difference_policy,
+                self._artifact.target_alignment.canonical_width, self._artifact.target_alignment.canonical_height,
+            )
+        else:
+            spatial_evidence = _unavailable_spatial_evidence("PATCH_EMBEDDER_NOT_AVAILABLE")
         return AnalyzeObservation(
             schemaVersion="1.0", requestId=request.request_id, analysisId=analysis_id,
             rawSha256=request.raw_sha256, simulation=False, resolvedVersions=resolved,
@@ -480,6 +686,9 @@ class ProductionAnalyzer:
             normalization=NormalizationObservation(
                 canonicalSha256=hashlib.sha256(normalized.encoded).hexdigest(), alignment=normalized.alignment,
             ),
-            analysis=AnalysisObservation(state=AnalysisState.RUN, metric="cosine_distance", globalDistance=mean,
-                                         nearestGoldenId=nearest_id, nearestGoldenDistance=nearest, uncertainty=uncertainty),
+            analysis=AnalysisObservation(
+                state=AnalysisState.RUN, metric="cosine_distance", globalDistance=mean,
+                nearestGoldenId=nearest_id, nearestGoldenDistance=nearest, uncertainty=uncertainty,
+                spatialDifferenceEvidence=spatial_evidence,
+            ),
         )

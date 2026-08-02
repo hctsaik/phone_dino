@@ -12,11 +12,11 @@ from PIL import Image, UnidentifiedImageError
 from pydantic import ConfigDict, BaseModel, Field, ValidationError
 
 from .analyzer import RUNTIME_DIGEST
-from .artifacts import CharucoBoard, GoldenEmbedding, ProductionArtifact, StillGate, TargetAlignmentPolicy
+from .artifacts import CharucoBoard, GoldenEmbedding, ProductionArtifact, SpatialDifferencePolicy, StillGate, TargetAlignmentPolicy
 from .contracts import Identifier, PrefixedSha256
 from .decoder import DecodedImage
 from .engines import LocalDinoV2Adapter
-from .production import DinoV2Embedder, Embedder, Normalizer, OpenCvCharucoNormalizer
+from .production import DinoV2Embedder, Embedder, Normalizer, OpenCvCharucoNormalizer, PatchEmbedding
 from .security import digest_directory, digest_file
 
 
@@ -50,6 +50,7 @@ class ArtifactBuildSpec(StrictCompilerModel):
     still_gate: StillGate = Field(alias="stillGate")
     target_alignment: TargetAlignmentPolicy = Field(alias="targetAlignment")
     golden_sources: list[GoldenSource] = Field(alias="goldenSources", min_length=1, max_length=256)
+    spatial_difference_policy: SpatialDifferencePolicy | None = Field(default=None, alias="spatialDifferencePolicy")
 
     def model_post_init(self, __context: object) -> None:
         if len({source.id for source in self.golden_sources}) != len(self.golden_sources):
@@ -132,6 +133,7 @@ def compile_artifact(
     )
     embeddings: list[GoldenEmbedding] = []
     evidence: list[dict[str, object]] = []
+    supports_patches = hasattr(resolved_embedder, "embed_with_patches")
     for source in sorted(spec.golden_sources, key=lambda item: item.id):
         source_path = (spec_path.parent / source.path).resolve()
         decoded = _decoded_image(source_path, source.source_sha256)
@@ -140,20 +142,36 @@ def compile_artifact(
             raise CompilerError(f"GOLDEN_SOURCE_RECAPTURE_REQUIRED:{source.id}:{','.join(normalized.reason_codes)}")
         if normalized.alignment is None or normalized.alignment.state != "ALIGNED":
             raise CompilerError(f"GOLDEN_SOURCE_TARGET_ALIGNMENT_REQUIRED:{source.id}")
-        values = resolved_embedder.embed(normalized.rgb)
+        patches: PatchEmbedding | None = None
+        if supports_patches:
+            patches = resolved_embedder.embed_with_patches(normalized.rgb)  # type: ignore[union-attr]
+            values = patches.global_vector
+        else:
+            values = resolved_embedder.embed(normalized.rgb)
         if not values or not all(math.isfinite(value) for value in values) or not any(value != 0 for value in values):
             raise CompilerError(f"GOLDEN_EMBEDDING_INVALID:{source.id}")
-        embeddings.append(GoldenEmbedding(id=source.id, sourceSha256=source.source_sha256, values=values))
+        if patches is not None:
+            if not all(math.isfinite(value) for row in patches.patch_grid for value in row):
+                raise CompilerError(f"GOLDEN_PATCH_EMBEDDING_INVALID:{source.id}")
+            embeddings.append(GoldenEmbedding(
+                id=source.id, sourceSha256=source.source_sha256, values=values,
+                patchValues=patches.patch_grid, patchGridHeight=patches.grid_height, patchGridWidth=patches.grid_width,
+            ))
+        else:
+            embeddings.append(GoldenEmbedding(id=source.id, sourceSha256=source.source_sha256, values=values))
         evidence.append({
             "id": source.id,
             "sourceSha256": source.source_sha256,
             "canonicalSha256": "sha256:" + hashlib.sha256(normalized.encoded).hexdigest(),
             "alignment": normalized.alignment.model_dump(by_alias=True, mode="json"),
             "embeddingDimension": len(values),
+            "patchFeaturesIncluded": patches is not None,
         })
     if len({len(item.values) for item in embeddings}) != 1:
         raise CompilerError("GOLDEN_EMBEDDING_DIMENSION_MISMATCH")
-    artifact = normalization_artifact.model_copy(update={"golden_embeddings": embeddings})
+    artifact = normalization_artifact.model_copy(update={
+        "golden_embeddings": embeddings, "spatial_difference_policy": spec.spatial_difference_policy,
+    })
     encoded = json.dumps(
         artifact.model_dump(by_alias=True, mode="json"), ensure_ascii=False,
         separators=(",", ":"), sort_keys=True, allow_nan=False,

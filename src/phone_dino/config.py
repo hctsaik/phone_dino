@@ -29,6 +29,8 @@ class Settings:
     model_repository_version: str | None = None
     fixture_fallback_enabled: bool = False
     allow_target_only_alignment: bool = False
+    device: str = "cpu"
+    analysis_timeout_seconds: float = 8.0
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -51,4 +53,6 @@ class Settings:
             max_image_height=int(os.getenv("PHONE_DINO_MAX_IMAGE_HEIGHT", "8000")),
             model_repository_version=os.getenv("PHONE_DINO_MODEL_REPOSITORY_VERSION"),
             allow_target_only_alignment=_bool_env("PHONE_DINO_ALLOW_TARGET_ONLY_ALIGNMENT"),
+            device=os.getenv("PHONE_DINO_DEVICE", "cpu"),
+            analysis_timeout_seconds=float(os.getenv("PHONE_DINO_ANALYSIS_TIMEOUT_SECONDS", "8.0")),
         )

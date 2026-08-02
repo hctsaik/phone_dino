@@ -85,6 +85,68 @@ class NormalizationObservation(StrictModel):
     alignment: AlignmentObservation | None = None
 
 
+class BboxNormalized(StrictModel):
+    x: Annotated[float, Field(ge=0, le=1)]
+    y: Annotated[float, Field(ge=0, le=1)]
+    width: Annotated[float, Field(gt=0, le=1)]
+    height: Annotated[float, Field(gt=0, le=1)]
+
+    def model_post_init(self, __context: object) -> None:
+        if self.x + self.width > 1 or self.y + self.height > 1:
+            raise ValueError("bboxNormalized exceeds canonical bounds")
+
+
+class DifferenceRegion(StrictModel):
+    id: Identifier
+    bbox_normalized: BboxNormalized = Field(alias="bboxNormalized")
+    peak_score: Annotated[float, Field(ge=0, le=1)] = Field(alias="peakScore")
+    mean_score: Annotated[float, Field(ge=0, le=1)] = Field(alias="meanScore")
+
+
+class SpatialDifferenceEvidence(StrictModel):
+    """Patch-level DINO difference evidence. UNAVAILABLE is honest-by-default:
+
+    it is returned whenever the nearest Golden lacks patch features or no
+    spatial policy is pinned, rather than fabricating a map/mask.
+    """
+
+    state: Literal["AVAILABLE", "UNAVAILABLE"]
+    disclaimer_code: Literal["DIFFERENCE_NOT_DEFECT_PROOF"] = Field(alias="disclaimerCode")
+    reason_code: str | None = Field(default=None, alias="reasonCode", max_length=160)
+    generation_method: Literal["PATCH_DISTANCE"] | None = Field(default=None, alias="generationMethod")
+    # The map/mask are native-resolution patch-grid renders of exactly what DINO
+    # saw (post Resize+CenterCrop), not a resample of the full canonical ROI.
+    # This region locates that analyzed rectangle within canonical-ROI
+    # normalized coordinates so a consumer never overlays evidence onto pixels
+    # the model never examined.
+    evidence_region_normalized: BboxNormalized | None = Field(default=None, alias="evidenceRegionNormalized")
+    regions: list[DifferenceRegion] | None = Field(default=None, max_length=64)
+    map_png_base64: str | None = Field(default=None, alias="mapPngBase64", max_length=4_000_000)
+    mask_png_base64: str | None = Field(default=None, alias="maskPngBase64", max_length=4_000_000)
+    map_sha256: Sha256 | None = Field(default=None, alias="mapSha256")
+    mask_sha256: Sha256 | None = Field(default=None, alias="maskSha256")
+
+    def model_post_init(self, __context: object) -> None:
+        if self.state == "UNAVAILABLE":
+            available_fields = (
+                self.generation_method, self.regions, self.map_png_base64, self.mask_png_base64,
+                self.evidence_region_normalized, self.map_sha256, self.mask_sha256,
+            )
+            if any(field is not None for field in available_fields):
+                raise ValueError("UNAVAILABLE spatial difference evidence must not include generation data")
+            if not self.reason_code:
+                raise ValueError("UNAVAILABLE spatial difference evidence requires reasonCode")
+        else:
+            required_fields = (
+                self.generation_method, self.regions, self.map_png_base64, self.mask_png_base64,
+                self.evidence_region_normalized, self.map_sha256, self.mask_sha256,
+            )
+            if any(field is None for field in required_fields):
+                raise ValueError("AVAILABLE spatial difference evidence requires generation method, region, map, and mask")
+            if self.reason_code is not None:
+                raise ValueError("AVAILABLE spatial difference evidence must not include reasonCode")
+
+
 class AnalysisObservation(StrictModel):
     state: AnalysisState
     metric: Literal["cosine_distance"] | None = None
@@ -92,6 +154,7 @@ class AnalysisObservation(StrictModel):
     nearest_golden_id: str | None = Field(default=None, alias="nearestGoldenId", max_length=160)
     nearest_golden_distance: Annotated[float, Field(ge=0, le=2)] | None = Field(default=None, alias="nearestGoldenDistance")
     uncertainty: Annotated[float, Field(ge=0, le=1)] | None = None
+    spatial_difference_evidence: SpatialDifferenceEvidence | None = Field(default=None, alias="spatialDifferenceEvidence")
 
 
 class ResolvedVersions(StrictModel):

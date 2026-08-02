@@ -166,6 +166,31 @@ class GoldenEmbedding(StrictArtifactModel):
     id: Identifier
     source_sha256: PrefixedSha256 = Field(alias="sourceSha256")
     values: list[float] = Field(min_length=2, max_length=4096)
+    patch_values: list[list[float]] | None = Field(default=None, alias="patchValues", min_length=1, max_length=4096)
+    patch_grid_height: int | None = Field(default=None, alias="patchGridHeight", ge=1, le=256)
+    patch_grid_width: int | None = Field(default=None, alias="patchGridWidth", ge=1, le=256)
+
+    def model_post_init(self, __context: object) -> None:
+        has_patch_fields = (self.patch_values is not None, self.patch_grid_height is not None, self.patch_grid_width is not None)
+        if any(has_patch_fields) and not all(has_patch_fields):
+            raise ValueError("patchValues, patchGridHeight, and patchGridWidth must be set together")
+        if self.patch_values is None:
+            return
+        if len(self.patch_values) != self.patch_grid_height * self.patch_grid_width:
+            raise ValueError("patchValues length must equal patchGridHeight * patchGridWidth")
+        for patch in self.patch_values:
+            if len(patch) != len(self.values):
+                raise ValueError("every patch vector must have the same dimension as the Golden embedding")
+            if not all(value == value and abs(value) != float("inf") for value in patch):
+                raise ValueError("patch vectors must be finite")
+
+
+class SpatialDifferencePolicy(StrictArtifactModel):
+    """Per-Recipe, per-Model anomaly map/mask thresholds; never hardcoded in service code."""
+
+    anomaly_distance_threshold: float = Field(alias="anomalyDistanceThreshold", ge=0, le=2)
+    min_region_area_ratio: float = Field(alias="minRegionAreaRatio", ge=0, lt=1)
+    max_regions: int = Field(alias="maxRegions", ge=1, le=64)
 
 
 class ProductionArtifact(StrictArtifactModel):
@@ -185,6 +210,7 @@ class ProductionArtifact(StrictArtifactModel):
     still_gate: StillGate = Field(alias="stillGate")
     target_alignment: TargetAlignmentPolicy = Field(alias="targetAlignment")
     golden_embeddings: list[GoldenEmbedding] = Field(alias="goldenEmbeddings", min_length=1, max_length=256)
+    spatial_difference_policy: SpatialDifferencePolicy | None = Field(default=None, alias="spatialDifferencePolicy")
 
     def model_post_init(self, __context: object) -> None:
         if self.board.marker_length_mm >= self.board.square_length_mm:

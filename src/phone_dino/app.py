@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 import logging
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile, status
@@ -41,9 +43,17 @@ def _artifact_state(settings: Settings, analyzer: ProductionAnalyzer | None = No
 
 def create_app(settings: Settings | None = None, production_analyzer: ProductionAnalyzer | None = None) -> FastAPI:
     resolved = settings or Settings.from_env()
-    app = FastAPI(title="phone_dino", version=__version__)
-    app.state.settings = resolved
     production = production_analyzer or ProductionAnalyzer(resolved)
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        if not resolved.fixture_enabled:
+            ready, reason = await run_in_threadpool(production.warm_up)
+            _log("warm_up_completed", ready=ready, reason=reason)
+        yield
+
+    app = FastAPI(title="phone_dino", version=__version__, lifespan=lifespan)
+    app.state.settings = resolved
 
     async def authorize(authorization: str | None = Header(default=None)) -> None:
         expected = resolved.service_token
@@ -113,12 +123,16 @@ def create_app(settings: Settings | None = None, production_analyzer: Production
             ready, reason = _artifact_state(resolved, production)
             if not ready:
                 raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=reason)
+            remaining = (request.deadline - datetime.now(timezone.utc)).total_seconds()
+            bounded_timeout = max(0.1, min(remaining, resolved.analysis_timeout_seconds))
             try:
-                result = await run_in_threadpool(production.analyze, request, decoded)
+                result = await asyncio.wait_for(run_in_threadpool(production.analyze, request, decoded), timeout=bounded_timeout)
             except ArtifactError as exc:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
             except RuntimeError as exc:
                 raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+            except asyncio.TimeoutError as exc:
+                raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="ANALYSIS_TIMEOUT") from exc
 
         _log(
             "analysis_completed",
