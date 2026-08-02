@@ -2,7 +2,7 @@
 
 `phone_dino` is the internal, fail-closed image observation service used by `phone_cv`. It never returns a manufacturing action or a PASS/FAIL decision. `phone_cv` owns its versioned decision policy.
 
-The service includes strict multipart contracts, service-token authentication, content and bundle digest verification, bounded JPEG/PNG decoding, structured observations, and an explicitly enabled engineering fixture analyzer. The production path loads one immutable, content-addressed artifact, applies EXIF-safe Still Gate, uses ChArUco only for camera/plane normalization, then independently aligns the inspected target before a local-only DINOv2 ViT-S/14 comparison. LightGlue remains outside the controlled-pilot baseline; the offline baseline is bounded ORB/RANSAC affine alignment behind a pluggable target-aligner interface.
+The service includes strict multipart contracts, service-token authentication, content and bundle digest verification, bounded JPEG/PNG decoding, structured observations, and an explicitly enabled engineering fixture analyzer. The production path loads one immutable, content-addressed artifact, applies EXIF-safe Still Gate, uses ChArUco only for camera/plane normalization, then independently aligns the inspected target before a local-only DINOv2 ViT-S/14 comparison. LightGlue remains outside the controlled-pilot baseline; the offline baseline is bounded ORB/RANSAC affine alignment behind a pluggable target-aligner interface. Beyond the global embedding distance, an optional patch-level comparison can localize *where* a capture differs from Golden as a heatmap, binary mask, and bounding-box regions (see "Patch-level spatial difference evidence" below) — honestly reported as `UNAVAILABLE` rather than fabricated whenever the pinned artifact or Golden doesn't actually support it.
 
 ## Local engineering mode
 
@@ -131,11 +131,47 @@ The production artifact schema is strict. A compact example (digests and embeddi
     "minHeldOutMatches": 12,
     "maxHeldOutReprojectionErrorPx": 3.0
   },
-  "goldenEmbeddings": [{"id": "GOLDEN-001", "sourceSha256": "sha256:<64 hex>", "values": [0.1, 0.2]}]
+  "goldenEmbeddings": [{"id": "GOLDEN-001", "sourceSha256": "sha256:<64 hex>", "values": [0.1, 0.2]}],
+  "spatialDifferencePolicy": {"anomalyDistanceThreshold": 0.35, "minRegionAreaRatio": 0.01, "maxRegions": 8}
 }
 ```
 
 Schema `1.0` production artifacts are intentionally rejected. They encoded board-canonical normalization without the independently bound target reference and safety gates. Recompile from a reviewed `1.1` build spec; there is no automatic migration because inventing masks or geometry limits would be unsafe.
+
+## Patch-level spatial difference evidence (map / mask / regions)
+
+`analysis.globalDistance` alone cannot say *where* a capture differs from Golden. When the compiler's embedder supports it, each Golden embedding also carries `patchValues`/`patchGridHeight`/`patchGridWidth` — the DINOv2 patch-token grid (not just the CLS token) captured at compile time. At analyze time, if the artifact additionally pins a `spatialDifferencePolicy` and the nearest Golden has patch features, the response's `analysis.spatialDifferenceEvidence` is:
+
+```json
+{
+  "state": "AVAILABLE",
+  "disclaimerCode": "DIFFERENCE_NOT_DEFECT_PROOF",
+  "generationMethod": "PATCH_DISTANCE",
+  "evidenceRegionNormalized": {"x": 0.17, "y": 0.06, "width": 0.66, "height": 0.88},
+  "regions": [{"id": "D-001", "bboxNormalized": {"x": 0.2, "y": 0.2, "width": 0.1, "height": 0.1}, "peakScore": 0.7, "meanScore": 0.5}],
+  "mapPngBase64": "<base64 PNG heatmap>",
+  "maskPngBase64": "<base64 PNG binary mask>",
+  "mapSha256": "<64 hex>",
+  "maskSha256": "<64 hex>"
+}
+```
+
+- The map/mask are rendered at the exact pixel footprint DINO actually analyzed (post `Resize`+`CenterCrop`, always 224x224), not resampled across the full canonical ROI. `evidenceRegionNormalized` locates that analyzed rectangle within canonical-ROI normalized coordinates so a consumer never overlays evidence onto pixels the model never saw.
+- Reported `regions` are filtered to those overlapping at least one `targetAlignment.inspectionRegion` — a difference driven by a stable alignment/held-out landmark is not evidence about the inspected equipment and is dropped before `maxRegions` is applied.
+- Whenever real evidence cannot be produced — no `spatialDifferencePolicy` pinned, the nearest Golden lacks patch features, a patch-grid size mismatch, or the embedder doesn't support patches at all — the response is honest by construction instead of fabricated:
+
+```json
+{"state": "UNAVAILABLE", "disclaimerCode": "DIFFERENCE_NOT_DEFECT_PROOF", "reasonCode": "GOLDEN_PATCH_FEATURES_UNAVAILABLE"}
+```
+
+`compile_artifact` automatically records patch features per Golden whenever the configured embedder exposes `embed_with_patches` (the real `DinoV2Embedder` always does); nothing else needs to change in the build spec besides adding `spatialDifferencePolicy` if you want spatial evidence enabled for that Recipe.
+
+## Performance: warm-up, readiness caching, timeout, device
+
+- `readiness()` re-verifies the artifact/weights/model-repository digests, which is expensive (hashing the full ~90MB weights file and the vendored model-repository tree). A **positive** result is cached for the process lifetime — those are supposed to be immutable, read-only mounts in production — so this cost is paid once, not on every request or `/readyz` poll. A negative result is never cached, so a not-yet-mounted artifact keeps being retried.
+- The FastAPI app has a `lifespan` startup hook that calls this once and also pre-loads the DINOv2 weights into memory (`DinoV2Embedder.warm_up()`), so the first real request doesn't pay full cold-start latency.
+- `PHONE_DINO_ANALYSIS_TIMEOUT_SECONDS` (default `8.0`) bounds how long `/internal/v1/analyze` will wait for the synchronous analysis to finish, further bounded by the request's own `deadline`. A timeout returns `504` with `detail=ANALYSIS_TIMEOUT`. Because analysis runs in a thread pool, a timeout stops the *client* from waiting, not the in-flight CPU work; a hard-kill worker process is a later increment, not Phase 0.
+- `PHONE_DINO_DEVICE` (default `cpu`) selects the torch device for the embedder (`cpu` or `cuda`).
 
 ## Deterministic synthetic full-scene suite
 
