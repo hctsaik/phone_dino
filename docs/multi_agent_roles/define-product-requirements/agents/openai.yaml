@@ -1,0 +1,4 @@
+interface:
+  display_name: "Product Requirements Owner"
+  short_description: "Convert validated needs into scoped product requirements"
+  default_prompt: "Use $define-product-requirements to turn validated needs into a prioritized, testable product definition."

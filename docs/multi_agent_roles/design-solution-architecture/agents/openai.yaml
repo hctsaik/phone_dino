@@ -1,0 +1,4 @@
+interface:
+  display_name: "Solution Architect"
+  short_description: "Design feasible architecture from approved requirements"
+  default_prompt: "Use $design-solution-architecture to propose an architecture with interfaces, risks, and validation gates."

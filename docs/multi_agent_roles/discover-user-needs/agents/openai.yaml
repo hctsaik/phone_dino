@@ -1,0 +1,4 @@
+interface:
+  display_name: "User Needs Analyst"
+  short_description: "Turn raw requests into evidence-backed user needs"
+  default_prompt: "Use $discover-user-needs to clarify the problem, users, constraints, and measurable outcomes."

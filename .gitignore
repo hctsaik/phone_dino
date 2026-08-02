@@ -1,0 +1,13 @@
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+__pycache__/
+*.py[cod]
+.fixtures/
+.e2e-fixtures/
+dist/
+build/
+runtime/models/
+runtime/synthetic-suite/
+runtime/artifacts/

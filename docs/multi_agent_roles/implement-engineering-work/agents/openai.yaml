@@ -1,0 +1,4 @@
+interface:
+  display_name: "Implementation Engineer"
+  short_description: "Implement approved designs with tests and documentation"
+  default_prompt: "Use $implement-engineering-work to implement an approved design and verify it with focused tests."

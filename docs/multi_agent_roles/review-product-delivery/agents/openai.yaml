@@ -1,0 +1,4 @@
+interface:
+  display_name: "Product Delivery Reviewer"
+  short_description: "Review delivery against requirements and user outcomes"
+  default_prompt: "Use $review-product-delivery to evaluate a delivery against requirements and identify actionable gaps."
