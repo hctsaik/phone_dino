@@ -104,7 +104,7 @@ Target alignment 與 subject segmentation 是兩個不同問題。前者把 Curr
 
 MobileSAM 只在 Golden artifact compiler 執行，不參與 Current 對位，也不允許用每張 Current 的 segmentation 改寫 inspection support。若 alignment gate 失敗，流程仍是 `RECAPTURE_REQUIRED + NOT_RUN`，不可因為 SAM 有輸出而繞過。LightGlue 的狀態也不變：僅能 feature flag／shadow benchmark。
 
-完整 scorer contract 見 [Golden 主體分割與背景抑制設計](golden_subject_segmentation_design.md)；現行 runtime/artifact pin 為 PhoneDINO 0.7.2、schema 1.8、v18，Golden ID 仍保留 V10 lineage。
+完整 scorer contract 見 [Golden 主體分割與背景抑制設計](golden_subject_segmentation_design.md)；現行 runtime/artifact pin 為 PhoneDINO 0.7.4、schema 1.8、v21，Golden ID 為 `GOLDEN-ACTIVE-V19-4FBB2AEE`。
 
 ## 2026-08-03 schema 1.5／v10 驗證補充
 

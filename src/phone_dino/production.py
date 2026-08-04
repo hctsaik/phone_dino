@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import math
 import base64
+import json
+import logging
 from threading import Lock
 from dataclasses import dataclass, replace
 from io import BytesIO
@@ -22,7 +24,8 @@ from .config import Settings
 from .contracts import (
     AnalysisObservation, AnalysisState, AnalyzeObservation, AnalyzeRequest,
     AlignmentObservation, BboxNormalized, BoundaryDifferenceEvidence, BoundaryDifferenceRegion,
-    CandidateFilter, CandidateVerification, CandidateVerificationV2,
+    CandidateDimensionScaleEvidence, CandidateDimensionUncertaintyEvidence,
+    CandidateFilter, CandidatePhysicalDimensionEvidence, CandidateVerification, CandidateVerificationV2,
     CaptureAssessment, CaptureState, DifferenceRegion, NormalizationObservation, ResolvedVersions,
     DimensionUncertaintyEvidence, GoldenDimensionObservation, GoldenDimensionRequest,
     GoldenDimensionBoardCandidate,
@@ -75,6 +78,8 @@ class PlaneNormalizedCapture:
     source_rgb: object | None = None
     input_to_plane: object | None = None
     calibration_board: GoldenDimensionBoardCandidate | None = None
+    calibration_fiducial: str | None = None
+    calibration_diagnostics: tuple[dict[str, object], ...] = ()
 
 
 class Normalizer(Protocol):
@@ -897,63 +902,161 @@ class OpenCvCharucoPlaneNormalizer:
         if still_reasons:
             return PlaneNormalizedCapture(rgb=None, reason_codes=tuple(still_reasons))
 
-        qualified: list[tuple[GoldenDimensionBoardCandidate, object, object, float, int, int, float, float]] = []
+        qualified: list[tuple[GoldenDimensionBoardCandidate, object, float, int, int, float, float, str]] = []
+        diagnostics: list[dict[str, object]] = []
+        marker_detection_cache: dict[str, tuple[list[object], object | None]] = {}
         for candidate in candidates:
             dictionary_id = getattr(cv2.aruco, candidate.dictionary, None)
             if dictionary_id is None:
+                diagnostics.append({
+                    "profile": candidate.profile,
+                    "boardId": candidate.board_id,
+                    "revision": candidate.revision,
+                    "reason": "DICTIONARY_UNSUPPORTED",
+                })
                 continue
             dictionary = cv2.aruco.getPredefinedDictionary(dictionary_id)
-            charuco = cv2.aruco.CharucoBoard(
-                (candidate.squares_x, candidate.squares_y),
-                candidate.square_length_mm,
-                candidate.marker_length_mm,
-                dictionary,
-                np.asarray(candidate.marker_ids, dtype=np.int32),
-            )
-            corners, ids, _, _ = cv2.aruco.CharucoDetector(charuco).detectBoard(gray)
-            count = 0 if ids is None else len(ids)
-            if count < artifact.still_gate.min_charuco_corners:
-                continue
-            object_points = charuco.getChessboardCorners()[ids.flatten()][:, :2].astype(np.float32)
-            pixels_per_mm_x = artifact.board.canonical_width / (
-                (candidate.squares_x - 1) * candidate.square_length_mm
-            )
-            pixels_per_mm_y = artifact.board.canonical_height / (
-                (candidate.squares_y - 1) * candidate.square_length_mm
-            )
-            destination = object_points.copy()
-            destination[:, 0] *= pixels_per_mm_x
-            destination[:, 1] *= pixels_per_mm_y
-            transform, mask = cv2.findHomography(corners.reshape(-1, 2), destination, cv2.RANSAC, 3.0)
-            if transform is None or mask is None:
-                continue
-            inliers = int(mask.sum())
-            if inliers < artifact.still_gate.min_charuco_corners:
-                continue
-            selected = mask.reshape(-1).astype(bool)
-            predicted = cv2.perspectiveTransform(
-                corners.reshape(-1, 1, 2).astype(np.float32), transform,
-            ).reshape(-1, 2)
-            residuals = np.linalg.norm(predicted[selected] - destination[selected], axis=1)
-            reprojection_p95 = float(np.percentile(residuals, 95)) if residuals.size else 1000.0
-            qualified.append((
-                candidate, transform, charuco, reprojection_p95, count, inliers,
-                float(pixels_per_mm_x), float(pixels_per_mm_y),
-            ))
+            diagnostic: dict[str, object] = {
+                "profile": candidate.profile,
+                "boardId": candidate.board_id,
+                "revision": candidate.revision,
+                "charucoGeometryQualified": candidate.charuco_geometry_qualified,
+                "outerArucoGeometryQualified": candidate.outer_aruco_geometry_qualified,
+            }
+            candidate_fit: tuple[GoldenDimensionBoardCandidate, object, float, int, int, float, float, str] | None = None
+
+            if candidate.charuco_geometry_qualified:
+                charuco = cv2.aruco.CharucoBoard(
+                    (candidate.squares_x, candidate.squares_y),
+                    candidate.square_length_mm,
+                    candidate.marker_length_mm,
+                    dictionary,
+                    np.asarray(candidate.marker_ids, dtype=np.int32),
+                )
+                corners, ids, _, _ = cv2.aruco.CharucoDetector(charuco).detectBoard(gray)
+                count = 0 if ids is None else len(ids)
+                diagnostic["charucoDetectedCornerCount"] = count
+                if count >= artifact.still_gate.min_charuco_corners:
+                    object_points = charuco.getChessboardCorners()[ids.flatten()][:, :2].astype(np.float32)
+                    pixels_per_mm_x = artifact.board.canonical_width / (
+                        (candidate.squares_x - 1) * candidate.square_length_mm
+                    )
+                    pixels_per_mm_y = artifact.board.canonical_height / (
+                        (candidate.squares_y - 1) * candidate.square_length_mm
+                    )
+                    destination = object_points.copy()
+                    destination[:, 0] *= pixels_per_mm_x
+                    destination[:, 1] *= pixels_per_mm_y
+                    transform, mask = cv2.findHomography(
+                        corners.reshape(-1, 2), destination, cv2.RANSAC, 3.0,
+                    )
+                    if transform is not None and mask is not None:
+                        inliers = int(mask.sum())
+                        if inliers >= artifact.still_gate.min_charuco_corners:
+                            selected = mask.reshape(-1).astype(bool)
+                            predicted = cv2.perspectiveTransform(
+                                corners.reshape(-1, 1, 2).astype(np.float32), transform,
+                            ).reshape(-1, 2)
+                            residuals = np.linalg.norm(predicted[selected] - destination[selected], axis=1)
+                            reprojection_p95 = float(np.percentile(residuals, 95)) if residuals.size else 1000.0
+                            candidate_fit = (
+                                candidate, transform, reprojection_p95, count, inliers,
+                                float(pixels_per_mm_x), float(pixels_per_mm_y), "CHARUCO_CORNERS",
+                            )
+                            diagnostic["charucoInlierCornerCount"] = inliers
+                            diagnostic["charucoReprojectionP95Px"] = round(reprojection_p95, 4)
+
+            if candidate.outer_aruco_geometry_qualified:
+                if candidate.dictionary not in marker_detection_cache:
+                    marker_corners, marker_ids, _ = cv2.aruco.ArucoDetector(
+                        dictionary, cv2.aruco.DetectorParameters(),
+                    ).detectMarkers(gray)
+                    marker_detection_cache[candidate.dictionary] = (marker_corners, marker_ids)
+                marker_corners, marker_ids = marker_detection_cache[candidate.dictionary]
+                detected_markers = {
+                    int(marker_id): np.asarray(corners, dtype=np.float32).reshape(4, 2)
+                    for corners, marker_id in zip(
+                        marker_corners,
+                        [] if marker_ids is None else marker_ids.flatten(),
+                    )
+                }
+                source_points: list[list[float]] = []
+                physical_points: list[list[float]] = []
+                matched_marker_ids: list[int] = []
+                for marker in candidate.outer_markers:
+                    detected = detected_markers.get(marker.id)
+                    if detected is None:
+                        continue
+                    matched_marker_ids.append(marker.id)
+                    source_points.extend(detected.tolist())
+                    physical_points.extend([corner[:2] for corner in marker.corners_mm])
+                diagnostic["outerDetectedMarkerIds"] = matched_marker_ids
+                if (
+                    len(matched_marker_ids) >= 3
+                    and candidate.finished_width_mm is not None
+                    and candidate.finished_height_mm is not None
+                ):
+                    scale = min(
+                        artifact.board.canonical_width / candidate.finished_width_mm,
+                        artifact.board.canonical_height / candidate.finished_height_mm,
+                    )
+                    offset_x = (artifact.board.canonical_width - candidate.finished_width_mm * scale) / 2.0
+                    offset_y = (artifact.board.canonical_height - candidate.finished_height_mm * scale) / 2.0
+                    source = np.asarray(source_points, dtype=np.float32)
+                    physical = np.asarray(physical_points, dtype=np.float32)
+                    destination = physical * float(scale)
+                    destination[:, 0] += float(offset_x)
+                    destination[:, 1] += float(offset_y)
+                    outer_transform, outer_mask = cv2.findHomography(
+                        source, destination, cv2.RANSAC, 3.0,
+                    )
+                    if outer_transform is not None and outer_mask is not None:
+                        outer_inliers = int(outer_mask.sum())
+                        minimum_outer_inliers = max(8, artifact.still_gate.min_charuco_corners)
+                        if outer_inliers >= minimum_outer_inliers:
+                            selected = outer_mask.reshape(-1).astype(bool)
+                            predicted = cv2.perspectiveTransform(
+                                source.reshape(-1, 1, 2), outer_transform,
+                            ).reshape(-1, 2)
+                            residuals = np.linalg.norm(predicted[selected] - destination[selected], axis=1)
+                            outer_reprojection_p95 = (
+                                float(np.percentile(residuals, 95)) if residuals.size else 1000.0
+                            )
+                            diagnostic["outerInlierCornerCount"] = outer_inliers
+                            diagnostic["outerReprojectionP95Px"] = round(outer_reprojection_p95, 4)
+                            if candidate_fit is None:
+                                candidate_fit = (
+                                    candidate, outer_transform, outer_reprojection_p95,
+                                    len(source_points), outer_inliers, float(scale), float(scale),
+                                    "OUTER_ARUCO_CORNERS",
+                                )
+
+            if candidate_fit is not None:
+                diagnostic["selectedFiducial"] = candidate_fit[7]
+                qualified.append(candidate_fit)
+            diagnostics.append(diagnostic)
 
         if not qualified:
-            return PlaneNormalizedCapture(rgb=None, reason_codes=("CHARUCO_CORNERS_INSUFFICIENT",))
-        qualified.sort(key=lambda item: (-item[5], item[3], -item[4], item[0].profile))
+            return PlaneNormalizedCapture(
+                rgb=None,
+                reason_codes=("CHARUCO_CORNERS_INSUFFICIENT",),
+                calibration_diagnostics=tuple(diagnostics),
+            )
+        qualified.sort(key=lambda item: (-item[4], item[2], -item[3], item[0].profile))
         best = qualified[0]
         if len(qualified) > 1:
             second = qualified[1]
             # A nearly tied fit means a partial view can satisfy more than one
             # legal layout. Requiring a clearly stronger inlier set prevents
             # silently guessing small versus large board geometry.
-            if best[5] <= second[5] + 1 and best[3] >= second[3] * 0.5:
-                return PlaneNormalizedCapture(rgb=None, reason_codes=("CHARUCO_BOARD_PROFILE_AMBIGUOUS",))
+            if best[4] <= second[4] + 1 and best[2] >= second[2] * 0.5:
+                return PlaneNormalizedCapture(
+                    rgb=None,
+                    reason_codes=("CHARUCO_BOARD_PROFILE_AMBIGUOUS",),
+                    calibration_diagnostics=tuple(diagnostics),
+                )
 
-        candidate, transform, _, reprojection_p95, count, inliers, pixels_per_mm_x, pixels_per_mm_y = best
+        candidate, transform, reprojection_p95, count, inliers, pixels_per_mm_x, pixels_per_mm_y, fiducial = best
         canonical = cv2.warpPerspective(
             decoded, transform, (artifact.board.canonical_width, artifact.board.canonical_height),
         )
@@ -969,6 +1072,8 @@ class OpenCvCharucoPlaneNormalizer:
             source_rgb=cv2.cvtColor(decoded, cv2.COLOR_BGR2RGB),
             input_to_plane=transform,
             calibration_board=candidate,
+            calibration_fiducial=fiducial,
+            calibration_diagnostics=tuple(diagnostics),
         )
 
 
@@ -1003,7 +1108,8 @@ class OpenCvCharucoNormalizer:
             # target-relative alignment may still be safe when the immutable
             # target reference/held-out gates pass. Blur and exposure failures
             # remain fail-closed.
-            if self._allow_target_only_alignment and set(plane.reason_codes) == {"CHARUCO_CORNERS_INSUFFICIENT"}:
+            board_only_failures = {"CHARUCO_CORNERS_INSUFFICIENT", "CHARUCO_HOMOGRAPHY_INVALID"}
+            if self._allow_target_only_alignment and set(plane.reason_codes).issubset(board_only_failures):
                 import cv2
                 import numpy as np
                 with Image.open(BytesIO(image.data)) as source:
@@ -1011,19 +1117,31 @@ class OpenCvCharucoNormalizer:
                     raw_rgb = np.asarray(oriented, dtype=np.uint8)
                 return self._target.align(raw_rgb, artifact)
             return NormalizedCapture(None, b"", plane.reason_codes)
+        import numpy as np
+
         aligned = self._target.align(plane.rgb, artifact)
+        input_to_plane = np.eye(3, dtype=np.float64)
+        if aligned.reason_codes and self._allow_target_only_alignment and plane.source_rgb is not None:
+            raw_aligned = self._target.align(plane.source_rgb, artifact)
+            if raw_aligned.reason_codes:
+                return raw_aligned
+            aligned = raw_aligned
+            if plane.input_to_plane is None:
+                return aligned
+            input_to_plane = np.asarray(plane.input_to_plane, dtype=np.float64)
+            if input_to_plane.shape != (3, 3):
+                return aligned
         calibration = plane.metric_calibration
         if aligned.reason_codes or calibration is None or aligned.target_from_input is None:
             return aligned
-        import numpy as np
 
-        target_from_plane = np.asarray(aligned.target_from_input, dtype=np.float64)
-        if target_from_plane.shape == (2, 3):
-            target_from_plane = np.vstack((target_from_plane, (0.0, 0.0, 1.0)))
-        if target_from_plane.shape != (3, 3):
+        target_from_input = np.asarray(aligned.target_from_input, dtype=np.float64)
+        if target_from_input.shape == (2, 3):
+            target_from_input = np.vstack((target_from_input, (0.0, 0.0, 1.0)))
+        if target_from_input.shape != (3, 3):
             return aligned
         try:
-            target_to_plane = np.linalg.inv(target_from_plane)
+            target_to_plane = input_to_plane @ np.linalg.inv(target_from_input)
         except np.linalg.LinAlgError:
             return aligned
         return replace(
@@ -1504,6 +1622,248 @@ def _unavailable_physical_dimensions(reason_code: str) -> PhysicalDimensionEvide
         disclaimerCode="ENGINEERING_DIMENSION_NOT_METROLOGY_PROOF",
         reasonCode=reason_code,
     )
+
+
+def _unavailable_candidate_dimensions(reason_code: str) -> CandidatePhysicalDimensionEvidence:
+    return CandidatePhysicalDimensionEvidence(
+        state="UNAVAILABLE",
+        disclaimerCode="CANDIDATE_DIMENSION_ESTIMATE_NOT_DEFECT_PROOF",
+        reasonCode=reason_code,
+    )
+
+
+def _candidate_component_contours(
+    mask: object,
+    regions: list[DifferenceRegion],
+    canonical_width: int,
+    canonical_height: int,
+) -> dict[str, object]:
+    """Bind retained regions back to their exact connected candidate components."""
+    import cv2
+    import numpy as np
+
+    binary = (np.asarray(mask, dtype=np.uint8) > 0).astype(np.uint8)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    unused = set(range(1, count))
+    result: dict[str, object] = {}
+    for region in regions:
+        expected = (
+            int(round(region.bbox_normalized.x * canonical_width)),
+            int(round(region.bbox_normalized.y * canonical_height)),
+            int(round(region.bbox_normalized.width * canonical_width)),
+            int(round(region.bbox_normalized.height * canonical_height)),
+        )
+        candidates = sorted(
+            unused,
+            key=lambda label: sum(
+                abs(int(stats[label, field]) - expected[field]) for field in range(4)
+            ),
+        )
+        if not candidates:
+            continue
+        label = candidates[0]
+        observed = tuple(int(stats[label, field]) for field in range(4))
+        if any(abs(observed[field] - expected[field]) > 2 for field in range(4)):
+            continue
+        unused.remove(label)
+        component = (labels == label).astype(np.uint8) * 255
+        contours, _ = cv2.findContours(component, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        contours = [item for item in contours if len(item) >= 4 and cv2.contourArea(item) > 0]
+        if contours:
+            result[region.id] = max(contours, key=cv2.contourArea)
+    return result
+
+
+def _candidate_physical_dimensions(
+    artifact: ProductionArtifactV18,
+    request: AnalyzeRequest,
+    normalized: NormalizedCapture,
+    current_prediction: SubjectMaskPrediction | None,
+    spatial: SpatialDifferenceEvidence,
+) -> None:
+    """Attach per-candidate dimensions, preferring direct ChArUco projection."""
+    import cv2
+    import numpy as np
+
+    regions = spatial.regions or []
+    if not regions:
+        return
+    unavailable_reason: str | None = None
+    if spatial.mask_png_base64 is None or spatial.mask_sha256 is None:
+        unavailable_reason = "CANDIDATE_MASK_REQUIRED"
+    elif current_prediction is None:
+        unavailable_reason = "CURRENT_SUBJECT_SEGMENTATION_REQUIRED"
+    alignment = normalized.alignment
+    if unavailable_reason is None and (
+        alignment is None or alignment.state != "ALIGNED"
+        or not alignment.transform_within_bounds or not alignment.inspection_mask_applied
+    ):
+        unavailable_reason = "TARGET_ALIGNMENT_UNQUALIFIED"
+    if unavailable_reason is not None:
+        for region in regions:
+            region.physical_dimensions = _unavailable_candidate_dimensions(unavailable_reason)
+        return
+
+    encoded_mask = base64.b64decode(spatial.mask_png_base64, validate=True)
+    candidate_mask = cv2.imdecode(np.frombuffer(encoded_mask, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
+    expected_shape = (artifact.target_alignment.canonical_height, artifact.target_alignment.canonical_width)
+    if candidate_mask is None or candidate_mask.shape != expected_shape:
+        for region in regions:
+            region.physical_dimensions = _unavailable_candidate_dimensions("CANDIDATE_MASK_DIMENSIONS_INVALID")
+        return
+    contours = _candidate_component_contours(
+        candidate_mask, regions, artifact.target_alignment.canonical_width,
+        artifact.target_alignment.canonical_height,
+    )
+    policy = artifact.dimension_measurement_policy
+    calibration = normalized.metric_calibration
+    ratio_reference = request.golden_ratio_scale_reference if calibration is None else None
+
+    metric_from_target = None
+    direct_edge_uncertainty_mm = None
+    if calibration is not None:
+        if calibration.reprojection_error_px > policy.max_plane_reprojection_error_px:
+            unavailable_reason = "CALIBRATION_REPROJECTION_ERROR_ABOVE_POLICY"
+        else:
+            target_to_plane = np.asarray(calibration.target_to_plane, dtype=np.float64)
+            plane_to_mm = np.diag((
+                1.0 / calibration.pixels_per_mm_x,
+                1.0 / calibration.pixels_per_mm_y,
+                1.0,
+            ))
+            metric_from_target = plane_to_mm @ target_to_plane
+            if metric_from_target.shape != (3, 3) or not np.all(np.isfinite(metric_from_target)) \
+                    or abs(float(np.linalg.det(metric_from_target))) <= 1e-12:
+                unavailable_reason = "METRIC_TRANSFORM_INVALID"
+            else:
+                center = np.asarray([[[
+                    artifact.target_alignment.canonical_width / 2.0,
+                    artifact.target_alignment.canonical_height / 2.0,
+                ], [
+                    artifact.target_alignment.canonical_width / 2.0 + 1.0,
+                    artifact.target_alignment.canonical_height / 2.0,
+                ], [
+                    artifact.target_alignment.canonical_width / 2.0,
+                    artifact.target_alignment.canonical_height / 2.0 + 1.0,
+                ]]], dtype=np.float32)
+                probe = cv2.perspectiveTransform(center, metric_from_target).reshape(-1, 2)
+                mm_per_target_px = max(
+                    float(np.linalg.norm(probe[1] - probe[0])),
+                    float(np.linalg.norm(probe[2] - probe[0])),
+                )
+                direct_edge_uncertainty_mm = (
+                    calibration.reprojection_error_px
+                    / min(calibration.pixels_per_mm_x, calibration.pixels_per_mm_y)
+                    + policy.segmentation_boundary_uncertainty_px * mm_per_target_px
+                )
+    elif ratio_reference is None:
+        unavailable_reason = "CANDIDATE_SCALE_REQUIRED"
+
+    ratio_transform = None
+    ratio_edge_uncertainty_mm = None
+    if unavailable_reason is None and ratio_reference is not None:
+        subject_mask = (np.asarray(current_prediction.mask, dtype=np.uint8) > 0).astype(np.uint8) * 255
+        subject_contours, _ = cv2.findContours(subject_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        subject_contours = [item for item in subject_contours if len(item) >= 4 and cv2.contourArea(item) > 0]
+        if not subject_contours:
+            unavailable_reason = "CURRENT_SUBJECT_CONTOUR_INVALID"
+        else:
+            subject_points = np.concatenate(subject_contours, axis=0).astype(np.float32)
+            (_, _), (side_a, side_b), angle = cv2.minAreaRect(subject_points)
+            long_px, short_px = max(side_a, side_b), min(side_a, side_b)
+            if not math.isfinite(long_px) or not math.isfinite(short_px) or short_px <= 0:
+                unavailable_reason = "CURRENT_SUBJECT_CONTOUR_INVALID"
+            else:
+                theta = math.radians(angle + (90.0 if side_b > side_a else 0.0))
+                long_axis = np.asarray((math.cos(theta), math.sin(theta)), dtype=np.float64)
+                short_axis = np.asarray((-long_axis[1], long_axis[0]), dtype=np.float64)
+                long_scale = ratio_reference.length_mm / long_px
+                short_scale = ratio_reference.width_mm / short_px
+                ratio_transform = np.asarray((
+                    (long_axis[0] * long_scale, long_axis[1] * long_scale),
+                    (short_axis[0] * short_scale, short_axis[1] * short_scale),
+                ), dtype=np.float64)
+                ratio_edge_uncertainty_mm = (
+                    alignment.reprojection_error_px + policy.segmentation_boundary_uncertainty_px
+                ) * max(long_scale, short_scale)
+
+    for region in regions:
+        if unavailable_reason is not None:
+            region.physical_dimensions = _unavailable_candidate_dimensions(unavailable_reason)
+            continue
+        if region.kind != "SUBJECT_INTERIOR":
+            region.physical_dimensions = _unavailable_candidate_dimensions("CANDIDATE_NOT_SUBJECT_INTERIOR")
+            continue
+        contour = contours.get(region.id)
+        if contour is None:
+            region.physical_dimensions = _unavailable_candidate_dimensions("CANDIDATE_CONTOUR_INVALID")
+            continue
+        points = np.asarray(contour, dtype=np.float32)
+        if metric_from_target is not None:
+            metric_points = cv2.perspectiveTransform(points, metric_from_target).astype(np.float32)
+            method = "CHARUCO_PLANE_CANDIDATE_MASK_MIN_AREA_RECT_V1"
+            approval_state = "ENGINEERING_AUTO"
+            coordinate_space = "CHARUCO_BOARD_PLANE_MM"
+            scale = CandidateDimensionScaleEvidence(source="CURRENT_CHARUCO_BOARD")
+            uncertainty_method = "CONSERVATIVE_CALIBRATION_PLUS_CANDIDATE_BOUNDARY_V1"
+            edge_uncertainty_mm = direct_edge_uncertainty_mm
+            baseline_relative_uncertainty = 0.0
+        else:
+            flat = points.reshape(-1, 2).astype(np.float64)
+            metric_points = (flat @ ratio_transform.T).astype(np.float32).reshape(-1, 1, 2)
+            method = "GOLDEN_BASELINE_RATIO_CANDIDATE_MASK_MIN_AREA_RECT_V1"
+            approval_state = "GOLDEN_RATIO_ESTIMATE"
+            coordinate_space = "TARGET_CANONICAL_GOLDEN_RATIO_MM"
+            scale = CandidateDimensionScaleEvidence(
+                source="CONFIRMED_GOLDEN_DIMENSION_BASELINE",
+                templateId=ratio_reference.template_id,
+                sourcePhotoSha256=ratio_reference.source_photo_sha256,
+                measurementPlane=ratio_reference.measurement_plane,
+                confirmationSource=ratio_reference.confirmation_source,
+            )
+            uncertainty_method = "CONSERVATIVE_GOLDEN_RATIO_PLUS_ALIGNMENT_BOUNDARY_V1"
+            edge_uncertainty_mm = ratio_edge_uncertainty_mm
+            baseline_relative_uncertainty = ratio_reference.relative_linear_uncertainty
+        (_, _), (side_a, side_b), angle = cv2.minAreaRect(metric_points)
+        length_mm, width_mm = float(max(side_a, side_b)), float(min(side_a, side_b))
+        area_mm2 = float(abs(cv2.contourArea(metric_points)))
+        if not all(math.isfinite(value) and value > 0 for value in (length_mm, width_mm, area_mm2)):
+            region.physical_dimensions = _unavailable_candidate_dimensions("CANDIDATE_DIMENSION_GEOMETRY_INVALID")
+            continue
+        linear_uncertainty = 2.0 * float(edge_uncertainty_mm) + baseline_relative_uncertainty * width_mm
+        relative_linear = linear_uncertainty / width_mm
+        perimeter_mm = float(cv2.arcLength(metric_points, True))
+        area_uncertainty = (
+            perimeter_mm * float(edge_uncertainty_mm)
+            + math.pi * float(edge_uncertainty_mm) ** 2
+            + baseline_relative_uncertainty * area_mm2
+        )
+        if not all(math.isfinite(value) and value > 0 for value in (
+            linear_uncertainty, relative_linear, area_uncertainty,
+        )) or relative_linear > 1:
+            region.physical_dimensions = _unavailable_candidate_dimensions(
+                "CANDIDATE_MEASUREMENT_UNCERTAINTY_ABOVE_POLICY",
+            )
+            continue
+        region.physical_dimensions = CandidatePhysicalDimensionEvidence(
+            state="AVAILABLE",
+            disclaimerCode="CANDIDATE_DIMENSION_ESTIMATE_NOT_DEFECT_PROOF",
+            method=method,
+            approvalState=approval_state,
+            coordinateSpace=coordinate_space,
+            candidateMaskSha256=spatial.mask_sha256,
+            lengthMm=length_mm,
+            widthMm=width_mm,
+            areaMm2=area_mm2,
+            rotatedRectAngleDegrees=float(angle),
+            scale=scale,
+            uncertainty=CandidateDimensionUncertaintyEvidence(
+                method=uncertainty_method,
+                linearMm=linear_uncertainty,
+                areaMm2=area_uncertainty,
+                relativeLinear=relative_linear,
+            ),
+        )
 
 
 def _physical_dimension_evidence(
@@ -2619,12 +2979,13 @@ class ProductionAnalyzer:
                 "CANDIDATE_STRUCTURE_CONFIRMATION_V1",
             ]
         if isinstance(self._artifact, ProductionArtifactV18):
-            metadata["supportedSchemas"] = ["1.0", "1.1", "1.2", "1.3", "1.4"]
+            metadata["supportedSchemas"] = ["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"]
             metadata["capabilities"] = [
                 *metadata["capabilities"],
                 "CHARUCO_CAPTURE_SCALE_V1", "CURRENT_SUBJECT_PHYSICAL_DIMENSIONS_V1",
                 "DIMENSION_UNCERTAINTY_V1", "DIMENSION_FAIL_CLOSED_V1",
-                "GOLDEN_DIMENSION_BASELINE_V1",
+                "GOLDEN_DIMENSION_BASELINE_V1", "OUTER_ARUCO_PLANE_FALLBACK_V1",
+                "CANDIDATE_DIMENSION_CHARUCO_V1", "CANDIDATE_DIMENSION_GOLDEN_RATIO_V1",
             ]
             metadata["dimensionMeasurement"] = {
                 **self._artifact.dimension_measurement_policy.model_dump(by_alias=True, mode="json"),
@@ -2650,6 +3011,15 @@ class ProductionAnalyzer:
         plane = plane_normalizer.normalize_golden_plane(
             image, self._artifact, request.board_candidates,
         )
+        logging.getLogger("phone_dino").info(json.dumps({
+            "event": "golden_board_detection_completed",
+            "requestId": request.request_id,
+            "recipeId": request.recipe_id,
+            "selectedProfile": plane.calibration_board.profile if plane.calibration_board else None,
+            "selectedFiducial": plane.calibration_fiducial,
+            "reasonCodes": list(plane.reason_codes),
+            "candidates": list(plane.calibration_diagnostics),
+        }, separators=(",", ":"), sort_keys=True))
         evidence: PhysicalDimensionEvidence
         subject_mask_png_base64: str | None = None
         if plane.reason_codes:
@@ -3143,6 +3513,14 @@ class ProductionAnalyzer:
             if isinstance(self._artifact, ProductionArtifactV18)
             else None
         )
+        if (
+            request.schema_version == "1.5"
+            and isinstance(self._artifact, ProductionArtifactV18)
+            and spatial_evidence.state == "AVAILABLE"
+        ):
+            _candidate_physical_dimensions(
+                self._artifact, request, normalized, current_prediction, spatial_evidence,
+            )
         return AnalyzeObservation(
             schemaVersion=request.schema_version, requestId=request.request_id, analysisId=analysis_id,
             rawSha256=request.raw_sha256, simulation=request.simulation, resolvedVersions=resolved,

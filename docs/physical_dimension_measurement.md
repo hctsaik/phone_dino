@@ -1,20 +1,37 @@
 # Calibration + Segmentation physical dimension runtime
 
-Updated: 2026-08-04
+Updated: 2026-08-05
 
 ## Contract
 
-Artifact schema `1.8`, analyzer wire schema `1.4`, and PhoneCV profile schema `1.5`
+Artifact schema `1.8`, analyzer wire schema `1.5`, and PhoneCV profile schema `1.6`
 add engineering-only planar physical dimensions. The analyzer reports
-`analysis.physicalDimensionEvidence` on every successful schema-1.4 analysis.
-The state is either `AVAILABLE` with complete metric evidence or `UNAVAILABLE`
-with one reason code and no millimetre values.
+`analysis.physicalDimensionEvidence` for the whole Current subject and a separate
+`physicalDimensions` object on every retained candidate region. Evidence is
+either `AVAILABLE` with complete metric evidence or `UNAVAILABLE` with one
+reason code and no millimetre values.
 
 This evidence never represents a defect decision, PASS/FAIL result, or certified
 metrology result. Its disclaimer is
 `ENGINEERING_DIMENSION_NOT_METROLOGY_PROOF`.
 
-## Coordinate chain
+## Measurement methods
+
+The whole-subject measurement remains a direct ChArUco plane measurement. Each
+candidate region has two ordered methods:
+
+1. `CHARUCO_PLANE_CANDIDATE_MASK_MIN_AREA_RECT_V1` is preferred when this
+   Current capture has qualified ChArUco calibration. Candidate contour points
+   are projected directly through the Current target-to-board transform.
+2. `GOLDEN_BASELINE_RATIO_CANDIDATE_MASK_MIN_AREA_RECT_V1` is used only when
+   Current ChArUco is absent. It scales the candidate contour in the Current
+   subject's rotated long-/short-axis frame using the active Template's
+   operator-confirmed Golden length and width.
+
+The proportional method is explicitly labelled `GOLDEN_RATIO_ESTIMATE`; it is
+not silently substituted after a failed or high-residual ChArUco transform.
+
+## ChArUco coordinate chain
 
 1. Detect the pinned ChArUco board in the current capture.
 2. Estimate the camera-image to board-plane homography and its inlier P95
@@ -48,7 +65,13 @@ When available, the evidence contains:
 - `rotatedRectAngleDegrees`;
 - detected/inlier ChArUco corners, plane reprojection error, and X/Y pixels/mm;
 - `uncertainty.linearMm`, `uncertainty.areaMm2`, and relative linear uncertainty;
-- the exact Current subject-mask digest used for the measurement.
+- the exact Current subject-mask or retained candidate-mask digest used for the
+  measurement.
+
+Candidate evidence also contains its source binding. ChArUco evidence binds the
+Current calibration. Golden-ratio evidence binds the active Template ID, Golden
+photo digest, confirmed Golden length/width, measurement plane, and operator
+confirmation source.
 
 The conservative uncertainty model adds the calibration reprojection residual
 to the pinned MobileSAM boundary uncertainty. Linear uncertainty covers both
@@ -60,7 +83,8 @@ traceable uncertainty budget.
 
 No mm values are returned when any of the following applies:
 
-- ChArUco is absent in this capture;
+- ChArUco is absent in this capture and no qualified, operator-confirmed Golden
+  ratio reference was supplied;
 - the board homography or its reprojection error is outside policy;
 - target alignment is not qualified;
 - Current MobileSAM or the paired subject gate is not qualified;
@@ -68,8 +92,11 @@ No mm values are returned when any of the following applies:
 - the metric transform is invalid;
 - relative linear uncertainty exceeds the artifact policy.
 
-Target-only alignment may still run DINO when ChArUco is absent. Only physical
-dimension evidence becomes `UNAVAILABLE`.
+Target-only alignment may still run DINO when ChArUco is absent. Whole-subject
+ChArUco evidence remains `UNAVAILABLE`; retained candidates may use the
+Golden-ratio method. A visible ruler, full-frame pixel dimensions, stale
+calibration, or an unconfirmed Golden baseline is never used as an implicit
+scale.
 
 ## Physical validation still required
 

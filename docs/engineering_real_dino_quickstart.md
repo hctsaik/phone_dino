@@ -23,23 +23,23 @@
 
 | 項目 | 值 |
 |---|---|
-| Active alignment template | `PM-ABC-001` v7 / `8c6fb84f-7912-44b8-a29c-e8c1bfbd8ef5` |
-| Compiled Golden ID | `GOLDEN-ACTIVE-V10-8C6FB84F` |
-| Golden SHA-256 | `9fc72bdca285d6237af2b97400ec2469d662e7583ceb598ca59b177e663d2f67` |
+| Active alignment template | `PM-ABC-001` v19 / `4fbb2aee-5eb5-4ea0-a3b4-85b851f952e5` |
+| Compiled Golden ID | `GOLDEN-ACTIVE-V19-4FBB2AEE` |
+| Golden SHA-256 | `642c58f2dd16368b34c1e93516f935fa62f9178798a76c25d5e5a9adc00d3520` |
 | Model | DINOv2 ViT-S/14 |
 | Weights SHA-256 | `sha256:b938bf1bc15cd2ec0feacfe3a1bb553fe8ea9ca46a7e1d8d00217f29aef60cd9` |
 | Model repository digest | `sha256:6f2d411cf095064c503259f7539f399ef6929059d58ca86230792ace634cd063` |
-| Phone Dino release | `0.7.2` |
-| Analyzer runtime digest | `sha256:34d3750b4ea54cd6a00d92fea0d12e0a4c1b3ff177e0517878c531dcd73c0a2e` |
+| Phone Dino release | `0.7.4` |
+| Analyzer runtime digest | `sha256:db36e4c6a083714415218e623485f89e7a1fa2ae89dcbc46f5cabfe93d787a93` |
 | Artifact schema | `1.8` |
-| Artifact | `engineering-real-dino-artifact-v18.json` |
-| Artifact digest | `sha256:ddfb5213d1efbce6aefee4d85efdf16273299a6f7fe4ed95b300eefbbcd7b637` |
-| Artifact ROI digest | `sha256:49e89b6adbc8202c2b79575e6e61b0b45601666e0fe0ee277691055ee6f67514` |
-| Scorer input contract digest | `sha256:93e19e1f6cd0ec25c4011e7218eea8aa24e12cbcef9419646d5afe5abd936b66` |
-| Recipe analysis profile digest | `sha256:4eb9b0823328728bbbb1898070903d989d5541c8deee9bfaab69bc2af2853def` |
-| Golden scorer input SHA-256 | `sha256:7e9901b329018a81adf27fd3da1e528876796637ff71744dbfea15c8b06cf884` |
+| Artifact | `engineering-real-dino-artifact-v21.json` |
+| Artifact digest | `sha256:1535ee521488fd6f252e11baacd40f7c67ab201fae8ccf8896385724d6863139` |
+| Artifact ROI digest | `sha256:04fd2cb329af4fac5ecf7b7fda8ffdea08de9142d7b3bb60baeaddb2cdab9b73` |
+| Scorer input contract digest | `sha256:a99651d4f5ab2a6c0dbd95551c37894b94468232aa0897fd9e6db2ae17039019` |
+| Recipe analysis profile digest | `sha256:0f68790182e1505184c94c5505d4faa6cf7dfa369b469b67f7054c6e8dda54f1` |
+| Golden scorer input SHA-256 | `sha256:88adb2b3897986bc6573b4c2eae7c521c01b52566b69789ba6de43d5eaec89da` |
 | Subject method | `MOBILE_SAM_VIT_T_BOX_PROMPT` |
-| Subject mask SHA-256 | `sha256:073bfe5037a19b13cc072c617f7a2bd648e9be78d9b91b05bde400256db0905f` |
+| Subject mask SHA-256 | `sha256:959767c6d02fcd18584ea1a4ca2ded669116b8f73e90d3a2b6e997ce2ba1f6f8` |
 | MobileSAM repository digest | `sha256:d64ade5205e0d8d8ce9b958d750d1d712596da02fa2d13c8b0a1c0a89157f5c5` |
 | MobileSAM weights SHA-256 | `sha256:6dbb90523a35330fedd7f1d3dfc66f995213d81b29a5ca8108dbcdd4e37d6c2f` |
 
@@ -68,7 +68,7 @@ Invoke-RestMethod http://127.0.0.1:8082/readyz
 Invoke-RestMethod http://127.0.0.1:4174/api/v1/recipes/PM-ABC-001/engineering-dino-readiness
 ```
 
-兩者都必須回報 `analysisMode: ENGINEERING_REAL_DINO` 與 ready。PhoneDino readiness 的 subject metadata 必須是 `MOBILE_SAM_VIT_T_BOX_PROMPT` 與上述 mask SHA，capabilities 必須包含 `GOLDEN_DIMENSION_BASELINE_V1`，並回報相同的 runtime、ROI、scorer-input 與 recipe-profile digests；PhoneCV profile 必須 pin 相同值。若任一 pin mismatch，代表兩個服務使用不同 artifact/profile；不要略過驗證，應以相同 v18 artifact 與 profile 重啟。PhoneDino 只有在模型與 runtime MobileSAM 載入、immutable Golden ROI patch cache 完整預算後才會 ready；任一 identity 不符都會 fail closed。
+兩者都必須回報 `analysisMode: ENGINEERING_REAL_DINO` 與 ready。PhoneDino readiness 的 subject metadata 必須是 `MOBILE_SAM_VIT_T_BOX_PROMPT` 與上述 mask SHA，capabilities 必須包含 `GOLDEN_DIMENSION_BASELINE_V1`，並回報相同的 runtime、ROI、scorer-input 與 recipe-profile digests；PhoneCV profile 必須 pin 相同值。若任一 pin mismatch，代表兩個服務使用不同 artifact/profile；不要略過驗證，應以相同 v20 artifact 與 profile 重啟。PhoneDino 只有在模型與 runtime MobileSAM 載入、immutable Golden ROI patch cache 完整預算後才會 ready；任一 identity 不符都會 fail closed。
 
 ## 每次比對的輸出
 

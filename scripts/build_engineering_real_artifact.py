@@ -9,6 +9,7 @@ from pathlib import Path
 from PIL import Image, ImageOps, ImageStat
 
 from phone_dino.compiler import compile_artifact
+from phone_dino.contracts import GoldenDimensionBoardCandidate
 from phone_dino.production import _detect_dark_body_contour
 from phone_dino.security import digest_directory, digest_file
 
@@ -114,6 +115,11 @@ def main() -> None:
         choices=tuple(CALIBRATION_BOARD_PROFILES),
         default="LEGACY_5X7_20MM_V1",
         help="Immutable ChArUco geometry expected in Current captures",
+    )
+    parser.add_argument(
+        "--calibration-board-manifest",
+        type=Path,
+        help="Immutable PhoneCV board manifest used for Golden normalization",
     )
     parser.add_argument("--artifact-name", default="engineering-real-dino-artifact.json")
     args = parser.parse_args()
@@ -332,11 +338,40 @@ def main() -> None:
     spec_path = output_dir / "engineering-real-dino-build-spec.json"
     spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
     artifact_path = output_dir / args.artifact_name
+    board_candidates = None
+    if args.calibration_board_manifest is not None:
+        manifest_path = args.calibration_board_manifest.resolve()
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        charuco = manifest["charuco"]
+        aruco = manifest["aruco"]
+        finished = manifest["finishedSizeMm"]
+        board_candidates = [GoldenDimensionBoardCandidate.model_validate({
+            "boardId": manifest["boardId"],
+            "revision": manifest["revision"],
+            "profile": manifest["profile"],
+            "manifestSha256": digest_file(manifest_path),
+            "dictionary": aruco["dictionary"],
+            "squaresX": charuco["squaresX"],
+            "squaresY": charuco["squaresY"],
+            "squareLengthMm": charuco["squareLengthMm"],
+            "markerLengthMm": charuco["markerLengthMm"],
+            "markerIds": charuco["markerIds"],
+            "finishedWidthMm": finished["width"],
+            "finishedHeightMm": finished["height"],
+            "charucoOriginMm": charuco["originMm"],
+            "outerMarkers": [
+                {"id": marker["id"], "cornersMm": marker["cornersMm"]}
+                for marker in aruco["markers"]
+            ],
+            "charucoGeometryQualified": True,
+            "outerArucoGeometryQualified": len(aruco["markers"]) >= 3,
+        })]
     result = compile_artifact(
         spec_path, artifact_path, args.model_repository.resolve(), args.model_weights.resolve(),
         segmenter_repository=args.segmenter_repository.resolve(),
         segmenter_weights=args.segmenter_weights.resolve(),
         allow_target_only_alignment=True,
+        board_candidates=board_candidates,
     )
     summary = {
         "mode": "ENGINEERING_REAL_DINO",

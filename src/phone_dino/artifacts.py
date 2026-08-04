@@ -776,16 +776,20 @@ def load_artifact(path: Path, expected_digest: str, weights: Path) -> Production
     return artifact
 
 
-def verify_artifact_binding(artifact: ProductionArtifact, request: AnalyzeRequest) -> None:
-    paired_schema_matches = (
-        request.schema_version == "1.4"
+def _paired_wire_schema_matches(artifact: ProductionArtifact, wire_schema_version: str) -> bool:
+    return (
+        wire_schema_version in {"1.4", "1.5"}
         if isinstance(artifact, ProductionArtifactV18)
-        else request.schema_version == "1.3"
+        else wire_schema_version == "1.3"
         if isinstance(artifact, ProductionArtifactV17)
-        else request.schema_version == "1.2"
+        else wire_schema_version == "1.2"
         if isinstance(artifact, ProductionArtifactV16)
-        else request.schema_version not in {"1.2", "1.3"}
+        else wire_schema_version not in {"1.2", "1.3"}
     )
+
+
+def verify_artifact_binding(artifact: ProductionArtifact, request: AnalyzeRequest) -> None:
+    paired_schema_matches = _paired_wire_schema_matches(artifact, request.schema_version)
     if not paired_schema_matches:
         raise ArtifactError("PAIRED_INTERIOR_SCHEMA_ARTIFACT_MISMATCH")
     expected = {

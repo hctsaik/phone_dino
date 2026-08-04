@@ -1,23 +1,26 @@
 # phone_dino
 
-## Physical dimensions (artifact 1.8 / wire 1.4)
+## Physical dimensions (artifact 1.8 / wire 1.5)
 
-The engineering runtime can now combine this capture's ChArUco plane scale with
-the Current MobileSAM mask to report rotated-rectangle `lengthMm`, `widthMm`,
-mask `areaMm2`, and a conservative uncertainty estimate. The target alignment
-transform is inverted before measurement; target-canonical pixels are never
-treated as physical pixels directly. Missing calibration, unqualified
-alignment/segmentation, invalid contour geometry, or excessive uncertainty
-returns explicit `UNAVAILABLE` evidence without any mm values. See
+The engineering runtime combines this capture's ChArUco plane scale with the
+Current MobileSAM mask to report rotated-rectangle `lengthMm`, `widthMm`, mask
+`areaMm2`, and a conservative uncertainty estimate. Each retained candidate is
+measured directly through ChArUco when available; when ChArUco is absent, an
+operator-confirmed Golden length/width baseline may provide an explicitly
+labelled proportional estimate. The target alignment transform is inverted
+before direct measurement; target-canonical pixels are never treated as
+physical pixels directly. Missing or unqualified scale evidence, invalid
+contour geometry, or excessive uncertainty returns explicit `UNAVAILABLE`
+evidence without any mm values. See
 [Calibration + Segmentation physical dimension runtime](docs/physical_dimension_measurement.md).
 
-The active engineering pins are PhoneDINO `0.7.2`, artifact schema `1.8`, wire
-schema `1.4`, and PhoneCV profile schema `1.5`. Physical dimensions remain
+The active engineering pins are PhoneDINO `0.7.4`, artifact schema `1.8`, wire
+schema `1.5`, and PhoneCV profile schema `1.6`. Physical dimensions remain
 engineering evidence until a locked known-size real-device dataset is approved.
 
 ## Paired Current/Golden subject runtime (schema 1.8)
 
-The active engineering artifact is schema `1.8` and the analyzer wire response is schema `1.4`. After target-canonical alignment passes, runtime MobileSAM segments the Current image with the same pinned repository, weights, ROI box prompt, and canonical coordinate space used for Golden. It then computes `interior = erode(golden_mask & current_mask, 8 px)`. Both Current and Golden DINO inputs use the same neutral RGB value outside that interior, so background and boundary pixels cannot contribute to the primary DINO score or candidates.
+The active engineering artifact is schema `1.8` and the analyzer wire response is schema `1.5`. After target-canonical alignment passes, runtime MobileSAM segments the Current image with the same pinned repository, weights, ROI box prompt, and canonical coordinate space used for Golden. It then computes `interior = erode(golden_mask & current_mask, 8 px)`. Both Current and Golden DINO inputs use the same neutral RGB value outside that interior, so background and boundary pixels cannot contribute to the primary DINO score or candidates.
 
 Alignment failure stops before MobileSAM and DINO. Current-mask or paired-interior quality failure stops before DINO and returns `RECAPTURE_REQUIRED + NOT_RUN`. Boundary geometry is reported separately as mask IoU, area delta, missing/protruding regions, and contour distance; it is never emitted as a primary `SUBJECT_BOUNDARY` DINO candidate. See [Paired Current/Golden subject runtime](docs/paired_current_subject_runtime.md).
 
@@ -29,7 +32,7 @@ The service includes strict multipart contracts, service-token authentication, c
 
 要直接執行目前已綁定 `PM-ABC-001` Active Golden 的真實 DINOv2 工程流程，請參考 [Engineering Real DINO 實作與操作紀錄](docs/engineering_real_dino_quickstart.md)。以下 fixture 模式只用於 deterministic contract 測試。
 
-現行工程 pin 是 PhoneDINO `0.7.2`、artifact schema `1.8` 的 `engineering-real-dino-artifact-v18.json`，package digest `sha256:ddfb5213d1efbce6aefee4d85efdf16273299a6f7fe4ed95b300eefbbcd7b637`。Runtime 與 PhoneCV 會同時驗證 analyzer runtime digest `sha256:34d3750b4ea54cd6a00d92fea0d12e0a4c1b3ff177e0517878c531dcd73c0a2e`、paired-current subject contract、ROI-only scorer contract、Golden dimension baseline capability 和四角色 RecipeAnalysisProfile；尺寸校正會以 ChArUco 幾何辨識小／大板，QR 不參與量測；任一 identity 不符皆 fail closed。
+現行工程 pin 是 PhoneDINO `0.7.4`、artifact schema `1.8` 的 `engineering-real-dino-artifact-v21.json`，package digest `sha256:1535ee521488fd6f252e11baacd40f7c67ab201fae8ccf8896385724d6863139`。Runtime 與 PhoneCV 會同時驗證 analyzer runtime digest `sha256:db36e4c6a083714415218e623485f89e7a1fa2ae89dcbc46f5cabfe93d787a93`、paired-current subject contract、ROI-only scorer contract、Golden dimension baseline capability 和四角色 RecipeAnalysisProfile；候選尺寸優先使用合格 ChArUco，Current 沒有 ChArUco 時才使用已確認的 Golden 長寬比例估算。QR 與畫面中的尺不參與量測；任一 identity 不符皆 fail closed。
 
 Use Python 3.11 or 3.12:
 

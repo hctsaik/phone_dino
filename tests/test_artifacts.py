@@ -7,7 +7,10 @@ import json
 import pytest
 
 from phone_dino.analyzer import RUNTIME_DIGEST
-from phone_dino.artifacts import ArtifactError, CandidateVerificationPolicy, CharucoBoard, ScorerInputContract, load_artifact
+from phone_dino.artifacts import (
+    ArtifactError, CandidateVerificationPolicy, CharucoBoard, ProductionArtifactV18,
+    ScorerInputContract, _paired_wire_schema_matches, load_artifact,
+)
 
 
 def prefixed(value: bytes) -> str:
@@ -43,6 +46,14 @@ def target_alignment() -> dict[str, object]:
         "maxRotationDegrees": 15.0, "maxShear": 0.05, "maxTranslationPx": 300.0,
         "maxSecondaryInlierRatio": 0.35, "minHeldOutMatches": 4, "maxHeldOutReprojectionErrorPx": 3.0,
     }
+
+
+def test_schema_18_accepts_existing_wire_14_and_candidate_dimension_wire_15():
+    artifact = object.__new__(ProductionArtifactV18)
+
+    assert _paired_wire_schema_matches(artifact, "1.4")
+    assert _paired_wire_schema_matches(artifact, "1.5")
+    assert not _paired_wire_schema_matches(artifact, "1.3")
 
 
 def test_artifact_rejects_unknown_fields_and_zero_embeddings(tmp_path):

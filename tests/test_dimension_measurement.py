@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+import base64
+import hashlib
 
 import pytest
 
@@ -8,7 +10,11 @@ np = pytest.importorskip("numpy", reason="production vision extra is not install
 cv2 = pytest.importorskip("cv2", reason="production OpenCV extra is not installed")
 
 from phone_dino.artifacts import CharucoBoard, DimensionMeasurementPolicy, StillGate
-from phone_dino.contracts import AlignmentObservation, GoldenDimensionBoardCandidate, PhysicalDimensionEvidence
+from phone_dino.contracts import (
+    AlignmentObservation, BboxNormalized, CandidateFilter, DifferenceRegion,
+    GoldenDimensionBoardCandidate, GoldenRatioScaleReference, PhysicalDimensionEvidence,
+    SpatialDifferenceEvidence,
+)
 from phone_dino.decoder import DecodedImage
 from phone_dino.production import (
     NormalizedCapture,
@@ -16,6 +22,7 @@ from phone_dino.production import (
     PlaneMetricCalibration,
     PlaneNormalizedCapture,
     TargetMetricCalibration,
+    _candidate_physical_dimensions,
     _golden_physical_dimension_evidence,
     _physical_dimension_evidence,
 )
@@ -174,6 +181,116 @@ def test_unavailable_dimension_contract_rejects_metric_values():
         )
 
 
+def _candidate_spatial() -> SpatialDifferenceEvidence:
+    mask = np.zeros((300, 400), dtype=np.uint8)
+    mask[140:160, 175:225] = 255
+    ok, encoded = cv2.imencode(".png", mask)
+    assert ok
+    payload = encoded.tobytes()
+    return SpatialDifferenceEvidence(
+        state="AVAILABLE",
+        disclaimerCode="DIFFERENCE_NOT_DEFECT_PROOF",
+        generationMethod="PAIRED_INTERIOR_ROI_TILED_PATCH_DISTANCE",
+        evidenceRegionNormalized=BboxNormalized(x=0.1, y=0.1, width=0.8, height=0.8),
+        evidenceCoordinateSpace="TARGET_CANONICAL_IMAGE",
+        regions=[DifferenceRegion(
+            id="D-001",
+            bboxNormalized=BboxNormalized(x=175 / 400, y=140 / 300, width=50 / 400, height=20 / 300),
+            peakScore=0.8,
+            meanScore=0.6,
+            kind="SUBJECT_INTERIOR",
+        )],
+        mapPngBase64=base64.b64encode(payload).decode("ascii"),
+        maskPngBase64=base64.b64encode(payload).decode("ascii"),
+        mapSha256=hashlib.sha256(payload).hexdigest(),
+        maskSha256=hashlib.sha256(payload).hexdigest(),
+        rawThresholdMaskPngBase64=base64.b64encode(payload).decode("ascii"),
+        rawThresholdMaskSha256=hashlib.sha256(payload).hexdigest(),
+        candidateFilter=CandidateFilter(
+            rawComponentCount=1,
+            retainedComponentCount=1,
+            suppressedSmallRegionCount=0,
+            suppressedByLimitCount=0,
+            maskSemantics="RETAINED_CANDIDATES",
+        ),
+    )
+
+
+def _axis_aligned_prediction() -> SubjectMaskPrediction:
+    mask = np.zeros((300, 400), dtype=np.uint8)
+    mask[100:200, 100:300] = 255
+    return SubjectMaskPrediction(
+        mask=mask, quality_score=0.99, prompt_box_xyxy=(0, 0, 400, 300),
+        foreground_ratio=float(np.count_nonzero(mask)) / mask.size,
+    )
+
+
+def test_candidate_dimensions_prefer_direct_charuco_projection():
+    spatial = _candidate_spatial()
+    request = SimpleNamespace(golden_ratio_scale_reference=GoldenRatioScaleReference(
+        source="CONFIRMED_GOLDEN_DIMENSION_BASELINE",
+        templateId="AT-001",
+        sourcePhotoSha256="a" * 64,
+        measurementPlane="FRONT",
+        lengthMm=200.0,
+        widthMm=100.0,
+        relativeLinearUncertainty=0.02,
+        confirmationSource="AUTO_MEASURED_ACCEPTED",
+    ))
+
+    _candidate_physical_dimensions(
+        _artifact(), request, _normalized(), _axis_aligned_prediction(), spatial,
+    )
+
+    evidence = spatial.regions[0].physical_dimensions
+    assert evidence is not None and evidence.state == "AVAILABLE"
+    assert evidence.method == "CHARUCO_PLANE_CANDIDATE_MASK_MIN_AREA_RECT_V1"
+    assert evidence.length_mm == pytest.approx(4.9, abs=0.2)
+    assert evidence.width_mm == pytest.approx(1.9, abs=0.2)
+    assert evidence.scale is not None and evidence.scale.source == "CURRENT_CHARUCO_BOARD"
+
+
+def test_candidate_dimensions_fall_back_to_confirmed_golden_subject_ratio():
+    spatial = _candidate_spatial()
+    reference = GoldenRatioScaleReference(
+        source="CONFIRMED_GOLDEN_DIMENSION_BASELINE",
+        templateId="AT-001",
+        sourcePhotoSha256="b" * 64,
+        measurementPlane="FRONT",
+        lengthMm=200.0,
+        widthMm=100.0,
+        relativeLinearUncertainty=0.02,
+        confirmationSource="USER_EDITED",
+    )
+
+    _candidate_physical_dimensions(
+        _artifact(), SimpleNamespace(golden_ratio_scale_reference=reference),
+        _normalized(calibration=False), _axis_aligned_prediction(), spatial,
+    )
+
+    evidence = spatial.regions[0].physical_dimensions
+    assert evidence is not None and evidence.state == "AVAILABLE"
+    assert evidence.method == "GOLDEN_BASELINE_RATIO_CANDIDATE_MASK_MIN_AREA_RECT_V1"
+    assert evidence.length_mm == pytest.approx(49.0, abs=1.0)
+    assert evidence.width_mm == pytest.approx(19.0, abs=1.0)
+    assert evidence.scale is not None
+    assert evidence.scale.source == "CONFIRMED_GOLDEN_DIMENSION_BASELINE"
+    assert evidence.scale.template_id == "AT-001"
+
+
+def test_candidate_dimensions_refuse_mm_without_charuco_or_confirmed_golden():
+    spatial = _candidate_spatial()
+
+    _candidate_physical_dimensions(
+        _artifact(), SimpleNamespace(golden_ratio_scale_reference=None),
+        _normalized(calibration=False), _axis_aligned_prediction(), spatial,
+    )
+
+    evidence = spatial.regions[0].physical_dimensions
+    assert evidence is not None and evidence.state == "UNAVAILABLE"
+    assert evidence.reason_code == "CANDIDATE_SCALE_REQUIRED"
+
+
 def test_phonecv_large_profile_marker_ids_produce_metric_charuco_calibration():
     marker_ids = np.arange(100, 117, dtype=np.int32)
     dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_1000)
@@ -209,9 +326,24 @@ def test_phonecv_large_profile_marker_ids_produce_metric_charuco_calibration():
     assert normalized.metric_calibration.reprojection_error_px < 1.0
 
 
-def _board_candidate(profile: str) -> GoldenDimensionBoardCandidate:
+def _board_candidate(
+    profile: str, *, charuco_geometry_qualified: bool = True,
+) -> GoldenDimensionBoardCandidate:
     small = profile == "CREDIT_CARD_85P6X54_V1"
     squares_x, squares_y = (5, 3) if small else (7, 5)
+    finished_width, finished_height = (85.6, 53.98) if small else (130.0, 90.0)
+    inset, marker_size = (3.0, 9.0) if small else (4.0, 12.0)
+    right = finished_width - inset - marker_size
+    middle_y = (finished_height - marker_size) / 2.0
+    bottom = finished_height - inset - marker_size
+    def marker(marker_id: int, x: float, y: float) -> dict[str, object]:
+        return {
+            "id": marker_id,
+            "cornersMm": [
+                [x, y, 0.0], [x + marker_size, y, 0.0],
+                [x + marker_size, y + marker_size, 0.0], [x, y + marker_size, 0.0],
+            ],
+        }
     return GoldenDimensionBoardCandidate(
         boardId="BC-042",
         revision=5 if small else 6,
@@ -223,6 +355,16 @@ def _board_candidate(profile: str) -> GoldenDimensionBoardCandidate:
         squareLengthMm=8.0 if small else 10.0,
         markerLengthMm=5.6 if small else 7.0,
         markerIds=list(range(100, 100 + squares_x * squares_y // 2)),
+        finishedWidthMm=finished_width,
+        finishedHeightMm=finished_height,
+        charucoOriginMm=[22.8, 3.0, 0.0] if small else [30.0, 5.0, 0.0],
+        outerMarkers=[
+            marker(0, inset, inset), marker(1, right, inset),
+            marker(2, inset, middle_y), marker(3, right, middle_y),
+            marker(4, inset, bottom), marker(5, right, bottom),
+        ],
+        charucoGeometryQualified=charuco_geometry_qualified,
+        outerArucoGeometryQualified=True,
     )
 
 
@@ -269,6 +411,50 @@ def test_golden_plane_selects_charuco_profile_from_marker_count_and_layout(profi
     assert normalized.calibration_board.profile == profile
     assert normalized.metric_calibration is not None
     assert normalized.metric_calibration.inlier_corner_count >= 6
+
+
+def test_legacy_small_board_uses_outer_aruco_geometry_when_charuco_artwork_is_unqualified():
+    candidate = _board_candidate("CREDIT_CARD_85P6X54_V1", charuco_geometry_qualified=False)
+    scale = 10
+    image = np.full(
+        (round(candidate.finished_height_mm * scale), round(candidate.finished_width_mm * scale)),
+        255,
+        dtype=np.uint8,
+    )
+    dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_1000)
+    for marker in candidate.outer_markers:
+        top_left = marker.corners_mm[0]
+        marker_size = round((marker.corners_mm[1][0] - top_left[0]) * scale)
+        rendered = cv2.aruco.generateImageMarker(dictionary, marker.id, marker_size, borderBits=1)
+        x, y = round(top_left[0] * scale), round(top_left[1] * scale)
+        image[y:y + marker_size, x:x + marker_size] = rendered
+    ok, encoded = cv2.imencode(".png", image)
+    assert ok
+    artifact = SimpleNamespace(
+        board=SimpleNamespace(canonical_width=896, canonical_height=896),
+        still_gate=StillGate.model_validate({
+            "minCharucoCorners": 6,
+            "minLaplacianVariance": 1.0,
+            "maxOverExposureRatio": 0.99,
+        }),
+    )
+
+    normalized = OpenCvCharucoPlaneNormalizer().normalize_golden_plane(
+        DecodedImage(
+            data=encoded.tobytes(), width=image.shape[1], height=image.shape[0],
+            format="PNG", elapsed_ms=0,
+        ),
+        artifact,
+        [candidate, _board_candidate("COMPACT_130X90_V1")],
+    )
+
+    assert normalized.reason_codes == ()
+    assert normalized.calibration_board is not None
+    assert normalized.calibration_board.profile == "CREDIT_CARD_85P6X54_V1"
+    assert normalized.calibration_fiducial == "OUTER_ARUCO_CORNERS"
+    assert normalized.metric_calibration is not None
+    assert normalized.metric_calibration.inlier_corner_count == 24
+    assert normalized.metric_calibration.reprojection_error_px < 1.0
 
 
 def test_golden_plane_refuses_equally_valid_profile_geometry_instead_of_guessing():

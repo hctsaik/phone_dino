@@ -16,6 +16,18 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
 
 
+class GoldenDimensionOuterMarker(StrictModel):
+    id: Annotated[int, Field(ge=0, le=999_999)]
+    corners_mm: Annotated[list[list[float]], Field(alias="cornersMm", min_length=4, max_length=4)]
+
+    @field_validator("corners_mm")
+    @classmethod
+    def validate_corners(cls, value: list[list[float]]) -> list[list[float]]:
+        if any(len(corner) != 3 for corner in value):
+            raise ValueError("outer marker cornersMm must contain four XYZ points")
+        return value
+
+
 class GoldenDimensionBoardCandidate(StrictModel):
     """Server-qualified printable geometry; QR is intentionally not used for measurement."""
 
@@ -29,6 +41,16 @@ class GoldenDimensionBoardCandidate(StrictModel):
     square_length_mm: Annotated[float, Field(alias="squareLengthMm", gt=0, le=1000)]
     marker_length_mm: Annotated[float, Field(alias="markerLengthMm", gt=0, le=1000)]
     marker_ids: Annotated[list[int], Field(alias="markerIds", min_length=1, max_length=5000)]
+    finished_width_mm: Annotated[float | None, Field(default=None, alias="finishedWidthMm", gt=0, le=10_000)]
+    finished_height_mm: Annotated[float | None, Field(default=None, alias="finishedHeightMm", gt=0, le=10_000)]
+    charuco_origin_mm: Annotated[
+        list[float] | None, Field(default=None, alias="charucoOriginMm", min_length=3, max_length=3),
+    ]
+    outer_markers: Annotated[
+        list[GoldenDimensionOuterMarker], Field(default_factory=list, alias="outerMarkers", max_length=100),
+    ]
+    charuco_geometry_qualified: bool = Field(default=True, alias="charucoGeometryQualified")
+    outer_aruco_geometry_qualified: bool = Field(default=False, alias="outerArucoGeometryQualified")
 
     @model_validator(mode="after")
     def validate_charuco_geometry(self) -> "GoldenDimensionBoardCandidate":
@@ -37,6 +59,16 @@ class GoldenDimensionBoardCandidate(StrictModel):
             raise ValueError("markerLengthMm must be smaller than squareLengthMm")
         if len(self.marker_ids) != expected or len(set(self.marker_ids)) != expected:
             raise ValueError("markerIds must contain one unique ID per ChArUco marker cell")
+        outer_ids = [marker.id for marker in self.outer_markers]
+        if len(outer_ids) != len(set(outer_ids)):
+            raise ValueError("outerMarkers must contain unique IDs")
+        outer_geometry = (
+            self.finished_width_mm, self.finished_height_mm, self.charuco_origin_mm,
+        )
+        if self.outer_aruco_geometry_qualified and (
+            any(value is None for value in outer_geometry) or len(self.outer_markers) < 3
+        ):
+            raise ValueError("outer ArUco calibration requires board size, origin, and at least three markers")
         return self
 
 
@@ -51,8 +83,31 @@ class ExecutionBundle(StrictModel):
     board_installation_version: PrefixedSha256 = Field(alias="boardInstallationVersion")
 
 
+class GoldenRatioScaleReference(StrictModel):
+    """Server-bound, operator-confirmed Golden dimensions for no-board estimates."""
+
+    source: Literal["CONFIRMED_GOLDEN_DIMENSION_BASELINE"]
+    template_id: Identifier = Field(alias="templateId")
+    source_photo_sha256: Sha256 = Field(alias="sourcePhotoSha256")
+    measurement_plane: Literal["TOP", "FRONT", "SIDE"] = Field(alias="measurementPlane")
+    length_mm: Annotated[float, Field(alias="lengthMm", gt=0, le=100000)]
+    width_mm: Annotated[float, Field(alias="widthMm", gt=0, le=100000)]
+    relative_linear_uncertainty: Annotated[
+        float, Field(alias="relativeLinearUncertainty", gt=0, le=1),
+    ]
+    confirmation_source: Literal["AUTO_MEASURED_ACCEPTED", "USER_EDITED"] = Field(
+        alias="confirmationSource",
+    )
+
+    @model_validator(mode="after")
+    def validate_long_short_order(self) -> "GoldenRatioScaleReference":
+        if self.length_mm < self.width_mm:
+            raise ValueError("Golden ratio lengthMm must be the long side")
+        return self
+
+
 class AnalyzeRequest(StrictModel):
-    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4"] = Field(alias="schemaVersion")
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"] = Field(alias="schemaVersion")
     request_id: Identifier = Field(alias="requestId")
     session_id: Identifier = Field(alias="sessionId")
     capture_ordinal: Annotated[int, Field(ge=1, le=1000)] = Field(alias="captureOrdinal")
@@ -71,6 +126,9 @@ class AnalyzeRequest(StrictModel):
     board_candidates: Annotated[
         list[GoldenDimensionBoardCandidate], Field(alias="boardCandidates", max_length=8),
     ] = Field(default_factory=list)
+    golden_ratio_scale_reference: GoldenRatioScaleReference | None = Field(
+        default=None, alias="goldenRatioScaleReference",
+    )
     simulation: bool
 
     @field_validator("deadline")
@@ -79,6 +137,12 @@ class AnalyzeRequest(StrictModel):
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("deadline must include a timezone")
         return value
+
+    @model_validator(mode="after")
+    def ratio_reference_requires_schema_1_5(self) -> "AnalyzeRequest":
+        if self.golden_ratio_scale_reference is not None and self.schema_version != "1.5":
+            raise ValueError("goldenRatioScaleReference requires schemaVersion 1.5")
+        return self
 
 
 class CaptureState(str, Enum):
@@ -198,6 +262,90 @@ class CandidateVerificationV2(StrictModel):
                 raise ValueError("unqualified local alignment must not confirm candidate structure")
 
 
+class CandidateDimensionScaleEvidence(StrictModel):
+    source: Literal["CURRENT_CHARUCO_BOARD", "CONFIRMED_GOLDEN_DIMENSION_BASELINE"]
+    template_id: Identifier | None = Field(default=None, alias="templateId")
+    source_photo_sha256: Sha256 | None = Field(default=None, alias="sourcePhotoSha256")
+    measurement_plane: Literal["TOP", "FRONT", "SIDE"] | None = Field(
+        default=None, alias="measurementPlane",
+    )
+    confirmation_source: Literal["AUTO_MEASURED_ACCEPTED", "USER_EDITED"] | None = Field(
+        default=None, alias="confirmationSource",
+    )
+
+    @model_validator(mode="after")
+    def validate_source_binding(self) -> "CandidateDimensionScaleEvidence":
+        bound = (
+            self.template_id, self.source_photo_sha256, self.measurement_plane,
+            self.confirmation_source,
+        )
+        if self.source == "CURRENT_CHARUCO_BOARD" and any(value is not None for value in bound):
+            raise ValueError("Current ChArUco scale must not include Golden binding")
+        if self.source == "CONFIRMED_GOLDEN_DIMENSION_BASELINE" and any(
+            value is None for value in bound
+        ):
+            raise ValueError("Golden ratio scale requires complete baseline binding")
+        return self
+
+
+class CandidateDimensionUncertaintyEvidence(StrictModel):
+    method: Literal[
+        "CONSERVATIVE_CALIBRATION_PLUS_CANDIDATE_BOUNDARY_V1",
+        "CONSERVATIVE_GOLDEN_RATIO_PLUS_ALIGNMENT_BOUNDARY_V1",
+    ]
+    linear_mm: Annotated[float, Field(alias="linearMm", gt=0, le=10000)]
+    area_mm2: Annotated[float, Field(alias="areaMm2", gt=0, le=100_000_000)]
+    relative_linear: Annotated[float, Field(alias="relativeLinear", gt=0, le=1)]
+
+
+class CandidatePhysicalDimensionEvidence(StrictModel):
+    state: Literal["AVAILABLE", "UNAVAILABLE"]
+    disclaimer_code: Literal["CANDIDATE_DIMENSION_ESTIMATE_NOT_DEFECT_PROOF"] = Field(
+        alias="disclaimerCode",
+    )
+    reason_code: str | None = Field(default=None, alias="reasonCode", max_length=160)
+    method: Literal[
+        "CHARUCO_PLANE_CANDIDATE_MASK_MIN_AREA_RECT_V1",
+        "GOLDEN_BASELINE_RATIO_CANDIDATE_MASK_MIN_AREA_RECT_V1",
+    ] | None = None
+    approval_state: Literal["ENGINEERING_AUTO", "GOLDEN_RATIO_ESTIMATE"] | None = Field(
+        default=None, alias="approvalState",
+    )
+    coordinate_space: Literal[
+        "CHARUCO_BOARD_PLANE_MM", "TARGET_CANONICAL_GOLDEN_RATIO_MM",
+    ] | None = Field(default=None, alias="coordinateSpace")
+    candidate_mask_sha256: Sha256 | None = Field(default=None, alias="candidateMaskSha256")
+    length_mm: Annotated[float | None, Field(alias="lengthMm", gt=0, le=100000)] = None
+    width_mm: Annotated[float | None, Field(alias="widthMm", gt=0, le=100000)] = None
+    area_mm2: Annotated[float | None, Field(alias="areaMm2", gt=0, le=100_000_000)] = None
+    rotated_rect_angle_degrees: Annotated[
+        float | None, Field(alias="rotatedRectAngleDegrees", ge=-180, le=180),
+    ] = None
+    scale: CandidateDimensionScaleEvidence | None = None
+    uncertainty: CandidateDimensionUncertaintyEvidence | None = None
+
+    @model_validator(mode="after")
+    def validate_availability(self) -> "CandidatePhysicalDimensionEvidence":
+        values = (
+            self.method, self.approval_state, self.coordinate_space, self.candidate_mask_sha256,
+            self.length_mm, self.width_mm, self.area_mm2, self.rotated_rect_angle_degrees,
+            self.scale, self.uncertainty,
+        )
+        if self.state == "UNAVAILABLE":
+            if any(value is not None for value in values):
+                raise ValueError("UNAVAILABLE candidate dimensions must not include metric values")
+            if not self.reason_code:
+                raise ValueError("UNAVAILABLE candidate dimensions require reasonCode")
+        else:
+            if any(value is None for value in values):
+                raise ValueError("AVAILABLE candidate dimensions require complete metric evidence")
+            if self.reason_code is not None:
+                raise ValueError("AVAILABLE candidate dimensions must not include reasonCode")
+            if self.length_mm is not None and self.width_mm is not None and self.length_mm < self.width_mm:
+                raise ValueError("candidate dimension length must be the long side")
+        return self
+
+
 class DifferenceRegion(StrictModel):
     id: Identifier
     bbox_normalized: BboxNormalized = Field(alias="bboxNormalized")
@@ -205,6 +353,9 @@ class DifferenceRegion(StrictModel):
     mean_score: Annotated[float, Field(ge=0, le=1)] = Field(alias="meanScore")
     kind: Literal["SUBJECT_INTERIOR", "SUBJECT_BOUNDARY"] | None = None
     verification: CandidateVerification | CandidateVerificationV2 | None = None
+    physical_dimensions: CandidatePhysicalDimensionEvidence | None = Field(
+        default=None, alias="physicalDimensions",
+    )
 
 
 class CandidateFilter(StrictModel):
@@ -563,7 +714,7 @@ class ResolvedVersions(StrictModel):
 
 
 class AnalyzeObservation(StrictModel):
-    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4"] = Field(alias="schemaVersion")
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"] = Field(alias="schemaVersion")
     request_id: Identifier = Field(alias="requestId")
     analysis_id: Sha256 = Field(alias="analysisId")
     raw_sha256: Sha256 = Field(alias="rawSha256")

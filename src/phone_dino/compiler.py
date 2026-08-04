@@ -24,7 +24,7 @@ from .artifacts import (
     ScorerInputTileEmbedding, SpatialDifferencePolicy, StillGate, SubjectAlignmentContract,
     SubjectSegmentationContract, TargetAlignmentPolicy, inspection_roi_image,
 )
-from .contracts import Identifier, PrefixedSha256
+from .contracts import GoldenDimensionBoardCandidate, Identifier, PrefixedSha256
 from .decoder import DecodedImage
 from .engines import LocalDinoV2Adapter
 from .production import (
@@ -181,6 +181,7 @@ def compile_artifact(
     segmenter_weights: Path | None = None,
     segmenter_device: str = "cpu",
     allow_target_only_alignment: bool = False,
+    board_candidates: list[GoldenDimensionBoardCandidate] | None = None,
 ) -> CompileResult:
     try:
         spec = ArtifactBuildSpec.model_validate_json(spec_path.read_bytes())
@@ -198,7 +199,10 @@ def compile_artifact(
         raise CompilerError("MODEL_REPOSITORY_NOT_READABLE") from exc
     if repository_digest != spec.model_repository_version:
         raise CompilerError("MODEL_REPOSITORY_DIGEST_MISMATCH")
-    resolved_normalizer = normalizer or OpenCvCharucoNormalizer(allow_target_only_alignment=allow_target_only_alignment)
+    resolved_normalizer = normalizer or OpenCvCharucoNormalizer(
+        allow_target_only_alignment=allow_target_only_alignment,
+        allow_contour_anchor_alignment=allow_target_only_alignment,
+    )
     resolved_embedder = embedder or DinoV2Embedder(adapter)
     resolved_segmenter = subject_segmenter
     if spec.subject_segmentation is not None and resolved_segmenter is None:
@@ -244,7 +248,11 @@ def compile_artifact(
     for source in sorted(spec.golden_sources, key=lambda item: item.id):
         source_path = (spec_path.parent / source.path).resolve()
         decoded = _decoded_image(source_path, source.source_sha256)
-        normalized = resolved_normalizer.normalize(decoded, normalization_artifact)
+        normalized = (
+            resolved_normalizer.normalize(decoded, normalization_artifact, board_candidates)
+            if board_candidates and isinstance(resolved_normalizer, OpenCvCharucoNormalizer)
+            else resolved_normalizer.normalize(decoded, normalization_artifact)
+        )
         if normalized.reason_codes:
             raise CompilerError(f"GOLDEN_SOURCE_RECAPTURE_REQUIRED:{source.id}:{','.join(normalized.reason_codes)}")
         if normalized.alignment is None or normalized.alignment.state != "ALIGNED":
