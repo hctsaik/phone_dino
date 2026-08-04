@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 Sha256 = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
@@ -14,6 +14,30 @@ Identifier = Annotated[str, Field(min_length=1, max_length=160)]
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
+
+
+class GoldenDimensionBoardCandidate(StrictModel):
+    """Server-qualified printable geometry; QR is intentionally not used for measurement."""
+
+    board_id: Identifier = Field(alias="boardId")
+    revision: Annotated[int, Field(ge=1, le=1_000_000)]
+    profile: Identifier
+    manifest_sha256: PrefixedSha256 = Field(alias="manifestSha256")
+    dictionary: Annotated[str, Field(pattern=r"^DICT_[A-Z0-9_]+$")]
+    squares_x: Annotated[int, Field(alias="squaresX", ge=3, le=100)]
+    squares_y: Annotated[int, Field(alias="squaresY", ge=3, le=100)]
+    square_length_mm: Annotated[float, Field(alias="squareLengthMm", gt=0, le=1000)]
+    marker_length_mm: Annotated[float, Field(alias="markerLengthMm", gt=0, le=1000)]
+    marker_ids: Annotated[list[int], Field(alias="markerIds", min_length=1, max_length=5000)]
+
+    @model_validator(mode="after")
+    def validate_charuco_geometry(self) -> "GoldenDimensionBoardCandidate":
+        expected = self.squares_x * self.squares_y // 2
+        if self.marker_length_mm >= self.square_length_mm:
+            raise ValueError("markerLengthMm must be smaller than squareLengthMm")
+        if len(self.marker_ids) != expected or len(set(self.marker_ids)) != expected:
+            raise ValueError("markerIds must contain one unique ID per ChArUco marker cell")
+        return self
 
 
 class ExecutionBundle(StrictModel):
@@ -44,6 +68,9 @@ class AnalyzeRequest(StrictModel):
     execution_bundle: ExecutionBundle = Field(alias="executionBundle")
     artifact_package_digest: PrefixedSha256 = Field(alias="artifactPackageDigest")
     recipe_analysis_profile_digest: PrefixedSha256 | None = Field(default=None, alias="recipeAnalysisProfileDigest")
+    board_candidates: Annotated[
+        list[GoldenDimensionBoardCandidate], Field(alias="boardCandidates", max_length=8),
+    ] = Field(default_factory=list)
     simulation: bool
 
     @field_validator("deadline")
@@ -397,6 +424,16 @@ class GoldenDimensionRequest(StrictModel):
     content_type: Literal["image/jpeg", "image/png"] = Field(alias="contentType")
     prompt_region_normalized: BboxNormalized = Field(alias="promptRegionNormalized")
     measurement_plane: Literal["TOP", "FRONT", "SIDE"] = Field(alias="measurementPlane")
+    board_candidates: Annotated[
+        list[GoldenDimensionBoardCandidate], Field(alias="boardCandidates", max_length=8),
+    ] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_board_candidates(self) -> "GoldenDimensionRequest":
+        profiles = [candidate.profile for candidate in self.board_candidates]
+        if len(profiles) != len(set(profiles)):
+            raise ValueError("boardCandidates must contain at most one revision per profile")
+        return self
 
 
 class GoldenDimensionObservation(StrictModel):
@@ -409,8 +446,16 @@ class GoldenDimensionObservation(StrictModel):
     artifact_package_digest: PrefixedSha256 = Field(alias="artifactPackageDigest")
     analyzer_runtime_version: PrefixedSha256 = Field(alias="analyzerRuntimeVersion")
     calibration_board_profile: Identifier = Field(alias="calibrationBoardProfile")
+    calibration_board_id: Identifier | None = Field(default=None, alias="calibrationBoardId")
+    calibration_board_revision: int | None = Field(default=None, alias="calibrationBoardRevision", ge=1)
+    calibration_board_manifest_sha256: PrefixedSha256 | None = Field(
+        default=None, alias="calibrationBoardManifestSha256",
+    )
     measurement_plane: Literal["TOP", "FRONT", "SIDE"] = Field(alias="measurementPlane")
     physical_dimensions: PhysicalDimensionEvidence = Field(alias="physicalDimensions")
+    subject_mask_png_base64: str | None = Field(
+        default=None, alias="subjectMaskPngBase64", max_length=4_000_000,
+    )
 
 
 class SpatialDifferenceEvidence(StrictModel):

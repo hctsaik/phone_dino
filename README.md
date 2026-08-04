@@ -11,7 +11,7 @@ alignment/segmentation, invalid contour geometry, or excessive uncertainty
 returns explicit `UNAVAILABLE` evidence without any mm values. See
 [Calibration + Segmentation physical dimension runtime](docs/physical_dimension_measurement.md).
 
-The active engineering pins are PhoneDINO `0.7.1`, artifact schema `1.8`, wire
+The active engineering pins are PhoneDINO `0.7.2`, artifact schema `1.8`, wire
 schema `1.4`, and PhoneCV profile schema `1.5`. Physical dimensions remain
 engineering evidence until a locked known-size real-device dataset is approved.
 
@@ -29,7 +29,7 @@ The service includes strict multipart contracts, service-token authentication, c
 
 要直接執行目前已綁定 `PM-ABC-001` Active Golden 的真實 DINOv2 工程流程，請參考 [Engineering Real DINO 實作與操作紀錄](docs/engineering_real_dino_quickstart.md)。以下 fixture 模式只用於 deterministic contract 測試。
 
-現行工程 pin 是 PhoneDINO `0.7.1`、artifact schema `1.8` 的 `engineering-real-dino-artifact-v17.json`，package digest `sha256:7d1256e66a6be99c564b648d4b88dfc026e3215f3215862ff4b97bd12d8542ef`。Runtime 與 PhoneCV 會同時驗證 analyzer runtime digest `sha256:ee726620f17c7fc8e730f3ba240f4687f2af89c3e5b1beb46bb8223952aec723`、paired-current subject contract、ROI-only scorer contract、Golden dimension baseline capability 和四角色 RecipeAnalysisProfile；任一 identity 不符皆 fail closed。
+現行工程 pin 是 PhoneDINO `0.7.2`、artifact schema `1.8` 的 `engineering-real-dino-artifact-v18.json`，package digest `sha256:ddfb5213d1efbce6aefee4d85efdf16273299a6f7fe4ed95b300eefbbcd7b637`。Runtime 與 PhoneCV 會同時驗證 analyzer runtime digest `sha256:34d3750b4ea54cd6a00d92fea0d12e0a4c1b3ff177e0517878c531dcd73c0a2e`、paired-current subject contract、ROI-only scorer contract、Golden dimension baseline capability 和四角色 RecipeAnalysisProfile；尺寸校正會以 ChArUco 幾何辨識小／大板，QR 不參與量測；任一 identity 不符皆 fail closed。
 
 Use Python 3.11 or 3.12:
 

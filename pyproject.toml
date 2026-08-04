@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "phone-dino"
-version = "0.7.1"
+version = "0.7.2"
 description = "Fail-closed internal image observation service for phone_cv"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"

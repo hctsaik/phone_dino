@@ -21,6 +21,11 @@ from phone_dino.contracts import (
 from phone_dino.security import digest_directory
 
 
+_GOLDEN_MASK_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
+
+
 def settings(tmp_path, *, enabled: bool = True, token: str | None = "secret", max_bytes: int = 1024 * 1024) -> Settings:
     return Settings(
         service_token=token,
@@ -76,7 +81,7 @@ class GoldenDimensionAnalyzer:
                 method="CHARUCO_PLANE_GOLDEN_MASK_MIN_AREA_RECT_V1",
                 approvalState="ENGINEERING_AUTO",
                 coordinateSpace="CHARUCO_BOARD_PLANE_MM",
-                currentSubjectMaskSha256="b" * 64,
+                currentSubjectMaskSha256=hashlib.sha256(_GOLDEN_MASK_PNG).hexdigest(),
                 lengthMm=20.0,
                 widthMm=10.0,
                 areaMm2=200.0,
@@ -96,6 +101,7 @@ class GoldenDimensionAnalyzer:
                     relativeLinear=0.025,
                 ),
             ),
+            subjectMaskPngBase64=base64.b64encode(_GOLDEN_MASK_PNG).decode("ascii"),
         )
 
 
@@ -131,6 +137,7 @@ def test_golden_dimension_endpoint_returns_observation_without_decision(tmp_path
     assert body["measurementPlane"] == "TOP"
     assert body["physicalDimensions"]["lengthMm"] == 20.0
     assert body["physicalDimensions"]["method"] == "CHARUCO_PLANE_GOLDEN_MASK_MIN_AREA_RECT_V1"
+    assert base64.b64decode(body["subjectMaskPngBase64"]) == _GOLDEN_MASK_PNG
     assert "decision" not in body and "manufacturingAction" not in body
 
 

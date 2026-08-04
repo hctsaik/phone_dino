@@ -25,6 +25,7 @@ from .contracts import (
     CandidateFilter, CandidateVerification, CandidateVerificationV2,
     CaptureAssessment, CaptureState, DifferenceRegion, NormalizationObservation, ResolvedVersions,
     DimensionUncertaintyEvidence, GoldenDimensionObservation, GoldenDimensionRequest,
+    GoldenDimensionBoardCandidate,
     MetricCalibrationEvidence, PhysicalDimensionEvidence,
     ScorerInputTileDigest, SpatialDifferenceEvidence, SubjectSegmentationEvidence,
 )
@@ -73,6 +74,7 @@ class PlaneNormalizedCapture:
     metric_calibration: PlaneMetricCalibration | None = None
     source_rgb: object | None = None
     input_to_plane: object | None = None
+    calibration_board: GoldenDimensionBoardCandidate | None = None
 
 
 class Normalizer(Protocol):
@@ -866,6 +868,109 @@ class OpenCvCharucoPlaneNormalizer:
             input_to_plane=transform,
         )
 
+    def normalize_golden_plane(
+        self,
+        image: DecodedImage,
+        artifact: ProductionArtifact,
+        candidates: list[GoldenDimensionBoardCandidate],
+    ) -> PlaneNormalizedCapture:
+        """Select one Server-qualified ChArUco profile by marker layout, never by QR."""
+        if not candidates:
+            return self.normalize_plane(image, artifact)
+        import cv2
+        import numpy as np
+
+        try:
+            with Image.open(BytesIO(image.data)) as source:
+                oriented = ImageOps.exif_transpose(source).convert("RGB")
+                decoded = cv2.cvtColor(np.asarray(oriented), cv2.COLOR_RGB2BGR)
+        except OSError as exc:
+            raise RuntimeError("IMAGE_DECODE_FAILED") from exc
+        gray = cv2.cvtColor(decoded, cv2.COLOR_BGR2GRAY)
+        sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        overexposure = float(np.count_nonzero(gray >= 250) / gray.size)
+        still_reasons: list[str] = []
+        if sharpness < artifact.still_gate.min_laplacian_variance:
+            still_reasons.append("BLUR")
+        if overexposure > artifact.still_gate.max_over_exposure_ratio:
+            still_reasons.append("OVER_EXPOSURE")
+        if still_reasons:
+            return PlaneNormalizedCapture(rgb=None, reason_codes=tuple(still_reasons))
+
+        qualified: list[tuple[GoldenDimensionBoardCandidate, object, object, float, int, int, float, float]] = []
+        for candidate in candidates:
+            dictionary_id = getattr(cv2.aruco, candidate.dictionary, None)
+            if dictionary_id is None:
+                continue
+            dictionary = cv2.aruco.getPredefinedDictionary(dictionary_id)
+            charuco = cv2.aruco.CharucoBoard(
+                (candidate.squares_x, candidate.squares_y),
+                candidate.square_length_mm,
+                candidate.marker_length_mm,
+                dictionary,
+                np.asarray(candidate.marker_ids, dtype=np.int32),
+            )
+            corners, ids, _, _ = cv2.aruco.CharucoDetector(charuco).detectBoard(gray)
+            count = 0 if ids is None else len(ids)
+            if count < artifact.still_gate.min_charuco_corners:
+                continue
+            object_points = charuco.getChessboardCorners()[ids.flatten()][:, :2].astype(np.float32)
+            pixels_per_mm_x = artifact.board.canonical_width / (
+                (candidate.squares_x - 1) * candidate.square_length_mm
+            )
+            pixels_per_mm_y = artifact.board.canonical_height / (
+                (candidate.squares_y - 1) * candidate.square_length_mm
+            )
+            destination = object_points.copy()
+            destination[:, 0] *= pixels_per_mm_x
+            destination[:, 1] *= pixels_per_mm_y
+            transform, mask = cv2.findHomography(corners.reshape(-1, 2), destination, cv2.RANSAC, 3.0)
+            if transform is None or mask is None:
+                continue
+            inliers = int(mask.sum())
+            if inliers < artifact.still_gate.min_charuco_corners:
+                continue
+            selected = mask.reshape(-1).astype(bool)
+            predicted = cv2.perspectiveTransform(
+                corners.reshape(-1, 1, 2).astype(np.float32), transform,
+            ).reshape(-1, 2)
+            residuals = np.linalg.norm(predicted[selected] - destination[selected], axis=1)
+            reprojection_p95 = float(np.percentile(residuals, 95)) if residuals.size else 1000.0
+            qualified.append((
+                candidate, transform, charuco, reprojection_p95, count, inliers,
+                float(pixels_per_mm_x), float(pixels_per_mm_y),
+            ))
+
+        if not qualified:
+            return PlaneNormalizedCapture(rgb=None, reason_codes=("CHARUCO_CORNERS_INSUFFICIENT",))
+        qualified.sort(key=lambda item: (-item[5], item[3], -item[4], item[0].profile))
+        best = qualified[0]
+        if len(qualified) > 1:
+            second = qualified[1]
+            # A nearly tied fit means a partial view can satisfy more than one
+            # legal layout. Requiring a clearly stronger inlier set prevents
+            # silently guessing small versus large board geometry.
+            if best[5] <= second[5] + 1 and best[3] >= second[3] * 0.5:
+                return PlaneNormalizedCapture(rgb=None, reason_codes=("CHARUCO_BOARD_PROFILE_AMBIGUOUS",))
+
+        candidate, transform, _, reprojection_p95, count, inliers, pixels_per_mm_x, pixels_per_mm_y = best
+        canonical = cv2.warpPerspective(
+            decoded, transform, (artifact.board.canonical_width, artifact.board.canonical_height),
+        )
+        return PlaneNormalizedCapture(
+            rgb=cv2.cvtColor(canonical, cv2.COLOR_BGR2RGB),
+            metric_calibration=PlaneMetricCalibration(
+                pixels_per_mm_x=pixels_per_mm_x,
+                pixels_per_mm_y=pixels_per_mm_y,
+                detected_corner_count=count,
+                inlier_corner_count=inliers,
+                reprojection_error_px=reprojection_p95,
+            ),
+            source_rgb=cv2.cvtColor(decoded, cv2.COLOR_BGR2RGB),
+            input_to_plane=transform,
+            calibration_board=candidate,
+        )
+
 
 class OpenCvCharucoNormalizer:
     """Composes board-plane normalization with independent target alignment."""
@@ -881,8 +986,17 @@ class OpenCvCharucoNormalizer:
         )
         self._allow_target_only_alignment = allow_target_only_alignment
 
-    def normalize(self, image: DecodedImage, artifact: ProductionArtifact) -> NormalizedCapture:
-        plane = self._plane.normalize_plane(image, artifact)
+    def normalize(
+        self,
+        image: DecodedImage,
+        artifact: ProductionArtifact,
+        board_candidates: list[GoldenDimensionBoardCandidate] | None = None,
+    ) -> NormalizedCapture:
+        plane = (
+            self._plane.normalize_golden_plane(image, artifact, board_candidates)
+            if board_candidates
+            else self._plane.normalize_plane(image, artifact)
+        )
         if plane.reason_codes:
             # ChArUco is preferred for plane normalization, but it is not a
             # mandatory capture element. If the board is outside the frame,
@@ -2532,8 +2646,12 @@ class ProductionAnalyzer:
         if self._artifact.board.profile_id is None:
             raise RuntimeError("CALIBRATION_BOARD_PROFILE_NOT_PINNED")
 
-        plane = OpenCvCharucoPlaneNormalizer().normalize_plane(image, self._artifact)
+        plane_normalizer = OpenCvCharucoPlaneNormalizer()
+        plane = plane_normalizer.normalize_golden_plane(
+            image, self._artifact, request.board_candidates,
+        )
         evidence: PhysicalDimensionEvidence
+        subject_mask_png_base64: str | None = None
         if plane.reason_codes:
             reason_code = (
                 "CHARUCO_CALIBRATION_REQUIRED"
@@ -2569,7 +2687,12 @@ class ProductionAnalyzer:
                 )
             else:
                 evidence = _golden_physical_dimension_evidence(self._artifact, plane, prediction)
+                if evidence.state == "AVAILABLE":
+                    _, subject_mask_png_base64, subject_mask_sha = _encode_binary_png(prediction.mask)
+                    if subject_mask_sha != evidence.current_subject_mask_sha256:
+                        raise RuntimeError("GOLDEN_SUBJECT_MASK_DIGEST_MISMATCH")
 
+        selected_board = plane.calibration_board
         return GoldenDimensionObservation(
             schemaVersion="1.0",
             requestId=request.request_id,
@@ -2577,9 +2700,17 @@ class ProductionAnalyzer:
             rawSha256=request.raw_sha256,
             artifactPackageDigest=self.settings.artifact_package_digest,
             analyzerRuntimeVersion=RUNTIME_DIGEST,
-            calibrationBoardProfile=self._artifact.board.profile_id,
+            calibrationBoardProfile=(
+                selected_board.profile if selected_board is not None else self._artifact.board.profile_id
+            ),
+            calibrationBoardId=selected_board.board_id if selected_board is not None else None,
+            calibrationBoardRevision=selected_board.revision if selected_board is not None else None,
+            calibrationBoardManifestSha256=(
+                selected_board.manifest_sha256 if selected_board is not None else None
+            ),
             measurementPlane=request.measurement_plane,
             physicalDimensions=evidence,
+            subjectMaskPngBase64=subject_mask_png_base64,
         )
 
     def analyze(self, request: AnalyzeRequest, image: DecodedImage) -> AnalyzeObservation:
@@ -2587,7 +2718,11 @@ class ProductionAnalyzer:
         if not ready or self._artifact is None:
             raise RuntimeError(reason or "ANALYZER_NOT_READY")
         verify_artifact_binding(self._artifact, request)
-        normalized = self.normalizer.normalize(image, self._artifact)
+        normalized = (
+            self.normalizer.normalize(image, self._artifact, request.board_candidates)
+            if request.board_candidates and isinstance(self.normalizer, OpenCvCharucoNormalizer)
+            else self.normalizer.normalize(image, self._artifact)
+        )
         identity = "|".join((request.session_id, str(request.capture_ordinal), request.raw_sha256, request.execution_bundle_digest, RUNTIME_DIGEST))
         analysis_id = hashlib.sha256(identity.encode()).hexdigest()
         resolved = ResolvedVersions(

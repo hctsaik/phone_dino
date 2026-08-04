@@ -8,7 +8,7 @@ np = pytest.importorskip("numpy", reason="production vision extra is not install
 cv2 = pytest.importorskip("cv2", reason="production OpenCV extra is not installed")
 
 from phone_dino.artifacts import CharucoBoard, DimensionMeasurementPolicy, StillGate
-from phone_dino.contracts import AlignmentObservation, PhysicalDimensionEvidence
+from phone_dino.contracts import AlignmentObservation, GoldenDimensionBoardCandidate, PhysicalDimensionEvidence
 from phone_dino.decoder import DecodedImage
 from phone_dino.production import (
     NormalizedCapture,
@@ -207,3 +207,99 @@ def test_phonecv_large_profile_marker_ids_produce_metric_charuco_calibration():
     assert normalized.metric_calibration.detected_corner_count == 24
     assert normalized.metric_calibration.inlier_corner_count == 24
     assert normalized.metric_calibration.reprojection_error_px < 1.0
+
+
+def _board_candidate(profile: str) -> GoldenDimensionBoardCandidate:
+    small = profile == "CREDIT_CARD_85P6X54_V1"
+    squares_x, squares_y = (5, 3) if small else (7, 5)
+    return GoldenDimensionBoardCandidate(
+        boardId="BC-042",
+        revision=5 if small else 6,
+        profile=profile,
+        manifestSha256="sha256:" + ("5" if small else "6") * 64,
+        dictionary="DICT_5X5_1000",
+        squaresX=squares_x,
+        squaresY=squares_y,
+        squareLengthMm=8.0 if small else 10.0,
+        markerLengthMm=5.6 if small else 7.0,
+        markerIds=list(range(100, 100 + squares_x * squares_y // 2)),
+    )
+
+
+@pytest.mark.parametrize(
+    ("profile", "image_size"),
+    [
+        ("CREDIT_CARD_85P6X54_V1", (600, 360)),
+        ("COMPACT_130X90_V1", (700, 500)),
+    ],
+)
+def test_golden_plane_selects_charuco_profile_from_marker_count_and_layout(profile, image_size):
+    candidate = _board_candidate(profile)
+    dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_1000)
+    board = cv2.aruco.CharucoBoard(
+        (candidate.squares_x, candidate.squares_y),
+        candidate.square_length_mm,
+        candidate.marker_length_mm,
+        dictionary,
+        np.asarray(candidate.marker_ids, dtype=np.int32),
+    )
+    image = board.generateImage(image_size, marginSize=24, borderBits=1)
+    ok, encoded = cv2.imencode(".png", image)
+    assert ok
+    artifact = SimpleNamespace(
+        board=SimpleNamespace(canonical_width=896, canonical_height=896),
+        still_gate=StillGate.model_validate({
+            "minCharucoCorners": 6,
+            "minLaplacianVariance": 1.0,
+            "maxOverExposureRatio": 0.95,
+        }),
+    )
+
+    normalized = OpenCvCharucoPlaneNormalizer().normalize_golden_plane(
+        DecodedImage(
+            data=encoded.tobytes(), width=image_size[0], height=image_size[1],
+            format="PNG", elapsed_ms=0,
+        ),
+        artifact,
+        [_board_candidate("CREDIT_CARD_85P6X54_V1"), _board_candidate("COMPACT_130X90_V1")],
+    )
+
+    assert normalized.reason_codes == ()
+    assert normalized.calibration_board is not None
+    assert normalized.calibration_board.profile == profile
+    assert normalized.metric_calibration is not None
+    assert normalized.metric_calibration.inlier_corner_count >= 6
+
+
+def test_golden_plane_refuses_equally_valid_profile_geometry_instead_of_guessing():
+    candidate = _board_candidate("CREDIT_CARD_85P6X54_V1")
+    duplicate = GoldenDimensionBoardCandidate.model_validate({
+        **candidate.model_dump(by_alias=True, mode="json"),
+        "boardId": "BC-OTHER",
+        "revision": 1,
+        "profile": "CREDIT_CARD_DUPLICATE_V1",
+        "manifestSha256": "sha256:" + "d" * 64,
+    })
+    dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_1000)
+    board = cv2.aruco.CharucoBoard(
+        (candidate.squares_x, candidate.squares_y), candidate.square_length_mm,
+        candidate.marker_length_mm, dictionary, np.asarray(candidate.marker_ids, dtype=np.int32),
+    )
+    image = board.generateImage((600, 360), marginSize=24, borderBits=1)
+    ok, encoded = cv2.imencode(".png", image)
+    assert ok
+    artifact = SimpleNamespace(
+        board=SimpleNamespace(canonical_width=896, canonical_height=896),
+        still_gate=StillGate.model_validate({
+            "minCharucoCorners": 6, "minLaplacianVariance": 1.0, "maxOverExposureRatio": 0.95,
+        }),
+    )
+
+    normalized = OpenCvCharucoPlaneNormalizer().normalize_golden_plane(
+        DecodedImage(data=encoded.tobytes(), width=600, height=360, format="PNG", elapsed_ms=0),
+        artifact,
+        [candidate, duplicate],
+    )
+
+    assert normalized.reason_codes == ("CHARUCO_BOARD_PROFILE_AMBIGUOUS",)
+    assert normalized.metric_calibration is None

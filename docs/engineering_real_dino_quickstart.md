@@ -29,11 +29,11 @@
 | Model | DINOv2 ViT-S/14 |
 | Weights SHA-256 | `sha256:b938bf1bc15cd2ec0feacfe3a1bb553fe8ea9ca46a7e1d8d00217f29aef60cd9` |
 | Model repository digest | `sha256:6f2d411cf095064c503259f7539f399ef6929059d58ca86230792ace634cd063` |
-| Phone Dino release | `0.7.1` |
-| Analyzer runtime digest | `sha256:ee726620f17c7fc8e730f3ba240f4687f2af89c3e5b1beb46bb8223952aec723` |
+| Phone Dino release | `0.7.2` |
+| Analyzer runtime digest | `sha256:34d3750b4ea54cd6a00d92fea0d12e0a4c1b3ff177e0517878c531dcd73c0a2e` |
 | Artifact schema | `1.8` |
-| Artifact | `engineering-real-dino-artifact-v17.json` |
-| Artifact digest | `sha256:7d1256e66a6be99c564b648d4b88dfc026e3215f3215862ff4b97bd12d8542ef` |
+| Artifact | `engineering-real-dino-artifact-v18.json` |
+| Artifact digest | `sha256:ddfb5213d1efbce6aefee4d85efdf16273299a6f7fe4ed95b300eefbbcd7b637` |
 | Artifact ROI digest | `sha256:49e89b6adbc8202c2b79575e6e61b0b45601666e0fe0ee277691055ee6f67514` |
 | Scorer input contract digest | `sha256:93e19e1f6cd0ec25c4011e7218eea8aa24e12cbcef9419646d5afe5abd936b66` |
 | Recipe analysis profile digest | `sha256:4eb9b0823328728bbbb1898070903d989d5541c8deee9bfaab69bc2af2853def` |
@@ -68,7 +68,7 @@ Invoke-RestMethod http://127.0.0.1:8082/readyz
 Invoke-RestMethod http://127.0.0.1:4174/api/v1/recipes/PM-ABC-001/engineering-dino-readiness
 ```
 
-兩者都必須回報 `analysisMode: ENGINEERING_REAL_DINO` 與 ready。PhoneDino readiness 的 subject metadata 必須是 `MOBILE_SAM_VIT_T_BOX_PROMPT` 與上述 mask SHA，capabilities 必須包含 `GOLDEN_DIMENSION_BASELINE_V1`，並回報相同的 runtime、ROI、scorer-input 與 recipe-profile digests；PhoneCV profile 必須 pin 相同值。若任一 pin mismatch，代表兩個服務使用不同 artifact/profile；不要略過驗證，應以相同 v17 artifact 與 profile 重啟。PhoneDino 只有在模型與 runtime MobileSAM 載入、immutable Golden ROI patch cache 完整預算後才會 ready；任一 identity 不符都會 fail closed。
+兩者都必須回報 `analysisMode: ENGINEERING_REAL_DINO` 與 ready。PhoneDino readiness 的 subject metadata 必須是 `MOBILE_SAM_VIT_T_BOX_PROMPT` 與上述 mask SHA，capabilities 必須包含 `GOLDEN_DIMENSION_BASELINE_V1`，並回報相同的 runtime、ROI、scorer-input 與 recipe-profile digests；PhoneCV profile 必須 pin 相同值。若任一 pin mismatch，代表兩個服務使用不同 artifact/profile；不要略過驗證，應以相同 v18 artifact 與 profile 重啟。PhoneDino 只有在模型與 runtime MobileSAM 載入、immutable Golden ROI patch cache 完整預算後才會 ready；任一 identity 不符都會 fail closed。
 
 ## 每次比對的輸出
 
