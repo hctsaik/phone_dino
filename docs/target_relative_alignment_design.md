@@ -35,6 +35,8 @@ Production artifact 必須 immutable pin：
 
 舊版 board-relative artifact 不可自動升級，也不可通過 production readiness；必須重新編譯、重新驗證並取得新的 `artifactPackageDigest`。
 
+現行 schema 1.5 在此幾何契約之上再綁定 target-canonical Inspection ROI scorer contract 與四角色 RecipeAnalysisProfile。AlignmentTemplate 決定如何對位，TargetReference 決定 canonical target，NormalReferenceSet 決定距離基準，DisplayReference 只供 UI 視覺比較；四者不可再由單一「Golden」名稱隱式混用。全域與 spatial DINO evidence 必須使用相同 ROI tiles，並保存 scorer input identity。
+
 ## Runtime contract
 
 `captureAssessment=ACCEPTED` 時，`normalization.alignment` 必須存在：
@@ -53,7 +55,7 @@ Production artifact 必須 immutable pin：
 }
 ```
 
-允許的方法為 `TARGET_HOMOGRAPHY`、`TARGET_AFFINE`、`LIGHTGLUE_RESIDUAL` 與明確的 `SIMULATION_FIXTURE`。Production 不得使用 `SIMULATION_FIXTURE`；simulation 也不得假裝是真實 target alignment。
+允許的方法為 `TARGET_HOMOGRAPHY`、`TARGET_AFFINE`、`LIGHTGLUE_RESIDUAL`，以及明確限於工程模式的 `CONTOUR_ANCHOR_AFFINE`、`SUBJECT_CONTOUR_ECC_AFFINE` 或 `SIMULATION_FIXTURE`。Production 不得把後三者宣稱為 qualified target alignment；PhoneCV 必須將 contour fallback 標為 `LIMITED`。
 
 `canonicalSha256` 必須代表 target-aligned ROI，而不是 board canonical canvas。`phone_cv` 必須嚴格驗證 alignment 欄位、數值範圍與狀態一致性後，才可套用 DecisionPolicy。
 
@@ -93,3 +95,19 @@ LightGlue 是 pluggable residual aligner，不是 unrestricted image warp：
 - `phone_dino` production-vision tests 32/32 通過；`phone_cv` tests 53/53 通過。
 - engineering E2E 與 `simulation:false` production contract E2E 各 1/1 通過。
 - Multi-agent 獨立終審：`ACCEPT`，0 blocker、0 major；此結論只適用 engineering increment，不代表 physical CV/Pilot 核准。
+
+## 2026-08-03 Golden subject gate 補充
+
+Target alignment 與 subject segmentation 是兩個不同問題。前者把 Current 安全地映射到 Golden canonical coordinates；後者只定義該 canonical Golden 中的設備空間。Artifact schema 1.5 保留此 gate，並在 alignment 成功後才套用 hash-bound Golden subject/support/boundary masks，在 DINO 推論前以 Golden pixels 替換 support 外的 Current 背景。
+
+`SUBJECT_CONTOUR_ECC_AFFINE` 的 held-out residual 只允許使用貼近 immutable Golden subject-mask boundary 的 Golden Canny 強邊。`alignmentBandPx` 定義的是 Current 邊緣可被搜尋的寬帶，不代表該寬帶內的螢幕、桌面、線材或其他背景強邊可以成為 Golden 驗證樣本。這個區分避免背景變化被誤報成 subject pose error，同時保留既有 correlation、residual、coverage 與 transform bounds fail-closed gates。
+
+MobileSAM 只在 Golden artifact compiler 執行，不參與 Current 對位，也不允許用每張 Current 的 segmentation 改寫 inspection support。若 alignment gate 失敗，流程仍是 `RECAPTURE_REQUIRED + NOT_RUN`，不可因為 SAM 有輸出而繞過。LightGlue 的狀態也不變：僅能 feature flag／shadow benchmark。
+
+完整 scorer contract 見 [Golden 主體分割與背景抑制設計](golden_subject_segmentation_design.md)；現行 runtime/artifact pin 為 PhoneDINO 0.7.1、schema 1.8、v15，Golden ID 仍保留 V10 lineage。
+
+## 2026-08-03 schema 1.5／v10 驗證補充
+
+現行工程 v15 artifact（沿用 V10 Golden lineage）使用分層策略：ORB/RANSAC 優先；失敗時才啟用 rotated subject contour、coarse affine 與 ECC dual-hypothesis refinement。實拍 request `efe4499b-3aca-4350-9a25-1680704bde3b` 是 v10 的歷史 E2E 證據，成功回報 `SUBJECT_CONTOUR_ECC_AFFINE`、1,651 inliers，並輸出 `INSPECTION_ROI_ONLY` 分數與 target-canonical evidence identity。方法仍為 engineering-only，所以 comparison 正確維持 `LIMITED`。
+
+Artifact schema 1.5 將 AlignmentTemplate、TargetReference、NormalReferenceSet、DisplayReference 四種角色及其 recipe analysis profile 一併 digest-bind。PhoneCV profile schema 1.2 在送出 analyzer schema-1.1 request 前驗證這些 pins，回應也再次驗證 ROI、scorer contract、profile 與 evidence tile identity；任一不符即 fail closed。

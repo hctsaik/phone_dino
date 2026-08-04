@@ -11,3 +11,5 @@ build/
 runtime/models/
 runtime/synthetic-suite/
 runtime/artifacts/
+runtime/engineering-real-dino/
+runtime/*.log

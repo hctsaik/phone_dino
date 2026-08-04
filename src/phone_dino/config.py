@@ -29,8 +29,13 @@ class Settings:
     model_repository_version: str | None = None
     fixture_fallback_enabled: bool = False
     allow_target_only_alignment: bool = False
+    engineering_real_model_enabled: bool = False
+    engineering_contour_alignment_enabled: bool = False
     device: str = "cpu"
     analysis_timeout_seconds: float = 8.0
+    subject_segmenter_repo: Path | None = None
+    subject_segmenter_weights: Path | None = None
+    subject_segmenter_device: str = "cpu"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -38,6 +43,8 @@ class Settings:
         artifact_manifest = os.getenv("PHONE_DINO_ARTIFACT_MANIFEST")
         model_repo = os.getenv("PHONE_DINO_MODEL_REPO")
         model_weights = os.getenv("PHONE_DINO_MODEL_WEIGHTS")
+        subject_segmenter_repo = os.getenv("PHONE_DINO_SUBJECT_SEGMENTER_REPO")
+        subject_segmenter_weights = os.getenv("PHONE_DINO_SUBJECT_SEGMENTER_WEIGHTS")
         return cls(
             service_token=os.getenv("PHONE_DINO_SERVICE_TOKEN"),
             fixture_enabled=_bool_env("PHONE_DINO_ENABLE_ENGINEERING_FIXTURES"),
@@ -53,6 +60,15 @@ class Settings:
             max_image_height=int(os.getenv("PHONE_DINO_MAX_IMAGE_HEIGHT", "8000")),
             model_repository_version=os.getenv("PHONE_DINO_MODEL_REPOSITORY_VERSION"),
             allow_target_only_alignment=_bool_env("PHONE_DINO_ALLOW_TARGET_ONLY_ALIGNMENT"),
+            engineering_real_model_enabled=_bool_env("PHONE_DINO_ENGINEERING_REAL_MODEL"),
+            engineering_contour_alignment_enabled=_bool_env("PHONE_DINO_ENGINEERING_CONTOUR_ALIGNMENT"),
             device=os.getenv("PHONE_DINO_DEVICE", "cpu"),
             analysis_timeout_seconds=float(os.getenv("PHONE_DINO_ANALYSIS_TIMEOUT_SECONDS", "8.0")),
+            subject_segmenter_repo=(
+                Path(subject_segmenter_repo).resolve() if subject_segmenter_repo else None
+            ),
+            subject_segmenter_weights=(
+                Path(subject_segmenter_weights).resolve() if subject_segmenter_weights else None
+            ),
+            subject_segmenter_device=os.getenv("PHONE_DINO_SUBJECT_SEGMENTER_DEVICE", "cpu"),
         )

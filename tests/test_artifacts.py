@@ -6,7 +6,8 @@ import json
 
 import pytest
 
-from phone_dino.artifacts import ArtifactError, load_artifact
+from phone_dino.analyzer import RUNTIME_DIGEST
+from phone_dino.artifacts import ArtifactError, CandidateVerificationPolicy, CharucoBoard, ScorerInputContract, load_artifact
 
 
 def prefixed(value: bytes) -> str:
@@ -19,7 +20,7 @@ def valid_artifact(weights: bytes) -> dict[str, object]:
         "schemaVersion": "1.1", "recipeId": "recipe-1", "machineId": "machine-1", "boardId": "board-1",
         "goldenSetVersion": version, "normalizationPipelineVersion": version,
         "analyzerModelVersion": version, "decisionPolicyVersion": version, "boardInstallationVersion": version,
-        "analyzerRuntimeVersion": prefixed(b"phone_dino:0.3.0"), "modelRepositoryVersion": version,
+        "analyzerRuntimeVersion": RUNTIME_DIGEST, "modelRepositoryVersion": version,
         "modelWeightsSha256": prefixed(weights),
         "board": {"squaresX": 5, "squaresY": 7, "squareLengthMm": 20.0, "markerLengthMm": 15.0,
                   "dictionary": "DICT_4X4_50", "canonicalWidth": 640, "canonicalHeight": 896},
@@ -77,3 +78,59 @@ def test_artifact_rejects_overlapping_alignment_held_out_and_inspection_regions(
 
     with pytest.raises(ArtifactError, match="ARTIFACT_MANIFEST_INVALID"):
         load_artifact(artifact, prefixed(artifact.read_bytes()), weights)
+
+
+def test_candidate_gate_requires_approved_artifact_policy():
+    body = {
+        "version": "candidate-verify-1.0",
+        "method": "DINO_CROP_COSINE_V1",
+        "mode": "GATE",
+        "approvalState": "ENGINEERING_AUTO",
+        "contextPaddingRatio": 0.35,
+        "minimumCropSidePx": 112,
+        "maxCandidates": 12,
+        "reviewPriorityDistance": 0.1,
+        "highPriorityDistance": 0.25,
+    }
+    with pytest.raises(ValueError, match="GATE mode requires APPROVED"):
+        CandidateVerificationPolicy.model_validate(body)
+
+    body["approvalState"] = "APPROVED"
+    assert CandidateVerificationPolicy.model_validate(body).mode == "GATE"
+
+
+def test_scorer_input_contract_accepts_exact_three_channel_json_array():
+    payload = {
+        "schemaVersion": "1.0",
+        "policy": "INSPECTION_ROI_SUBJECT_SUPPORT_TILES_NEUTRAL_OUTSIDE",
+        "coordinateSpace": "TARGET_CANONICAL_IMAGE",
+        "inspectionRoiContractDigest": prefixed(b"roi"),
+        "tileOrder": "TOP_TO_BOTTOM_LEFT_TO_RIGHT",
+        "neutralRgb": [127, 127, 127],
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+    contract = ScorerInputContract.model_validate({**payload, "digest": prefixed(encoded)})
+
+    assert contract.neutral_rgb == [127, 127, 127]
+    with pytest.raises(ValueError):
+        ScorerInputContract.model_validate({**payload, "neutralRgb": [127, 127], "digest": prefixed(encoded)})
+
+
+def test_phonecv_charuco_profile_pins_exact_marker_ids():
+    board = CharucoBoard.model_validate({
+        "profileId": "COMPACT_130X90_V1",
+        "squaresX": 7, "squaresY": 5,
+        "squareLengthMm": 10.0, "markerLengthMm": 7.0,
+        "markerIds": list(range(100, 117)),
+        "dictionary": "DICT_5X5_1000",
+        "canonicalWidth": 896, "canonicalHeight": 896,
+    })
+
+    assert board.profile_id == "COMPACT_130X90_V1"
+    assert board.marker_ids == list(range(100, 117))
+    with pytest.raises(ValueError, match="one unique ID per marker cell"):
+        CharucoBoard.model_validate({
+            **board.model_dump(by_alias=True),
+            "markerIds": list(range(100, 116)),
+        })

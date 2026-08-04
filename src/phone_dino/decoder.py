@@ -35,7 +35,6 @@ async def read_and_validate_image(upload: UploadFile, content_type: str, setting
     if not data:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="EMPTY_IMAGE")
 
-    Image.MAX_IMAGE_PIXELS = settings.max_image_pixels
     try:
         with Image.open(BytesIO(data)) as probe:
             expected_format = "JPEG" if content_type == "image/jpeg" else "PNG"

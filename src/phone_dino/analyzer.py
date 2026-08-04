@@ -81,7 +81,7 @@ def analyze_fixture(
     analysis_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
     canonical_sha = hashlib.sha256(image.data).hexdigest()
     return AnalyzeObservation(
-        schemaVersion="1.0",
+        schemaVersion=request.schema_version,
         requestId=request.request_id,
         analysisId=analysis_id,
         rawSha256=request.raw_sha256,

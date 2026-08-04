@@ -10,8 +10,11 @@ import pytest
 np = pytest.importorskip("numpy", reason="production vision extra is not installed")
 cv2 = pytest.importorskip("cv2", reason="production OpenCV extra is not installed")
 
-from phone_dino.artifacts import TargetAlignmentPolicy
-from phone_dino.production import OpenCvTargetAligner
+from phone_dino.artifacts import SubjectAlignmentContract, TargetAlignmentPolicy
+from phone_dino.production import (
+    OpenCvTargetAligner, _align_with_dark_body_contour, _align_with_subject_ecc,
+    _detect_dark_body_contour,
+)
 
 
 def _reference() -> np.ndarray:
@@ -159,3 +162,176 @@ def test_alignment_is_repeatable_across_process_history_and_concurrent_calls():
     with ThreadPoolExecutor(max_workers=6) as pool:
         concurrent = list(pool.map(observe, range(12)))
     assert all(value == sequential[0] for value in (*sequential, *concurrent))
+
+
+def test_engineering_dark_body_contour_finds_only_a_central_equipment_body():
+    image = np.full((900, 700, 3), 235, dtype=np.uint8)
+    cv2.rectangle(image, (230, 315), (470, 700), (18, 18, 18), -1)
+
+    detected = _detect_dark_body_contour(image, expected_aspect=240 / 385)
+
+    assert detected is not None
+    assert detected.x == pytest.approx(230, abs=4)
+    assert detected.y == pytest.approx(315, abs=4)
+    assert detected.width == pytest.approx(241, abs=5)
+    assert detected.height == pytest.approx(386, abs=5)
+    assert detected.rectangularity >= 0.95
+
+    blank = np.full_like(image, 235)
+    assert _detect_dark_body_contour(blank, expected_aspect=240 / 385) is None
+
+    off_center = blank.copy()
+    cv2.rectangle(off_center, (0, 315), (180, 700), (18, 18, 18), -1)
+    assert _detect_dark_body_contour(off_center, expected_aspect=240 / 385) is None
+
+
+def test_engineering_contour_alignment_reports_its_limited_method_truthfully():
+    image = np.full((900, 700, 3), 235, dtype=np.uint8)
+    cv2.rectangle(image, (230, 315), (470, 700), (18, 18, 18), -1)
+    policy = SimpleNamespace(
+        contour_anchor_region=SimpleNamespace(x=230, y=315, width=241, height=386),
+        canonical_width=700, canonical_height=900,
+        min_scale=0.8, max_scale=1.2, max_translation_px=30.0,
+        max_reprojection_error_px=8.0,
+    )
+
+    result = _align_with_dark_body_contour(image, policy)
+
+    assert result.reason_codes == ()
+    assert result.alignment is not None
+    assert result.alignment.method == "CONTOUR_ANCHOR_AFFINE"
+
+
+def test_subject_boundary_ecc_refines_rotation_and_validates_held_out_edges():
+    height, width = 900, 700
+    reference = np.full((height, width, 3), 220, dtype=np.uint8)
+    cv2.rectangle(reference, (230, 315), (470, 700), (18, 18, 18), -1)
+    cv2.rectangle(reference, (248, 340), (452, 675), (35, 35, 35), 3)
+    cv2.circle(reference, (350, 560), 80, (80, 80, 80), 4)
+    cv2.line(reference, (250, 400), (450, 400), (120, 120, 120), 5)
+    subject = np.zeros((height, width), dtype=np.uint8)
+    cv2.rectangle(subject, (230, 315), (470, 700), 255, -1)
+    transform = cv2.getRotationMatrix2D((350, 507), 7.0, 1.05)
+    transform[:, 2] += (18, -12)
+    current = cv2.warpAffine(reference, transform, (width, height), borderValue=(220, 220, 220))
+    # An added object crossing the current silhouette must remain comparison
+    # evidence; its extra edges cannot veto an otherwise valid pose.
+    cv2.rectangle(current, (285, 270), (430, 335), (255, 80, 0), -1)
+    policy = SimpleNamespace(
+        contour_anchor_region=SimpleNamespace(x=230, y=315, width=241, height=386),
+        canonical_width=width, canonical_height=height,
+        min_scale=0.6, max_scale=1.5, max_translation_px=500.0,
+        max_reprojection_error_px=8.0,
+    )
+    contract = SubjectAlignmentContract.model_validate({
+        "version": "subject-align-1.0", "method": "SUBJECT_CONTOUR_ECC_AFFINE",
+        "approvalState": "ENGINEERING_AUTO", "maskSource": "GOLDEN_SUBJECT_MASK",
+        "alignmentBandPx": 24, "heldOutBlockPx": 32, "maxIterations": 200,
+        "convergenceEpsilon": 0.00001, "minEccCorrelation": 0.2,
+        "maxHeldOutResidualPx": 8.0, "minHeldOutCoverageRatio": 0.35,
+        "maxResidualTranslationPx": 120.0, "maxResidualRotationDegrees": 15.0,
+        "maxResidualScaleDelta": 0.25, "maxResidualShear": 0.15,
+    })
+
+    result = _align_with_subject_ecc(current, reference, policy, subject, contract)
+
+    assert result.reason_codes == ()
+    assert result.alignment is not None
+    assert result.alignment.method == "SUBJECT_CONTOUR_ECC_AFFINE"
+    assert result.alignment.inlier_ratio >= 0.9
+    assert result.alignment.reprojection_error_px <= 2.0
+    assert result.alignment.coverage_ratio >= 0.2
+    assert result.rgb.shape == reference.shape
+
+
+def test_subject_boundary_ecc_ignores_background_edges_inside_the_search_band():
+    height, width = 900, 700
+    reference = np.full((height, width, 3), 220, dtype=np.uint8)
+    cv2.rectangle(reference, (230, 315), (470, 700), (18, 18, 18), -1)
+    # Immutable background texture sits inside the broad +/-24 px search band,
+    # but does not touch the approved subject-mask boundary.
+    for y in range(330, 690, 30):
+        cv2.line(reference, (210, y), (225, y), (0, 0, 0), 3)
+        cv2.line(reference, (475, y), (490, y), (0, 0, 0), 3)
+    subject = np.zeros((height, width), dtype=np.uint8)
+    cv2.rectangle(subject, (230, 315), (470, 700), 255, -1)
+    current = reference.copy()
+    current[:, :230] = 245
+    current[:, 471:] = 245
+    policy = SimpleNamespace(
+        contour_anchor_region=SimpleNamespace(x=230, y=315, width=241, height=386),
+        canonical_width=width, canonical_height=height,
+        min_scale=0.6, max_scale=1.5, max_rotation_degrees=35.0,
+        max_translation_px=500.0, max_reprojection_error_px=8.0,
+    )
+    contract = SubjectAlignmentContract.model_validate({
+        "version": "subject-align-1.0", "method": "SUBJECT_CONTOUR_ECC_AFFINE",
+        "approvalState": "ENGINEERING_AUTO", "maskSource": "GOLDEN_SUBJECT_MASK",
+        "alignmentBandPx": 24, "heldOutBlockPx": 32, "maxIterations": 200,
+        "convergenceEpsilon": 0.00001, "minEccCorrelation": 0.2,
+        "maxHeldOutResidualPx": 8.0, "minHeldOutCoverageRatio": 0.35,
+        "maxResidualTranslationPx": 120.0, "maxResidualRotationDegrees": 15.0,
+        "maxResidualScaleDelta": 0.25, "maxResidualShear": 0.15,
+    })
+
+    result = _align_with_subject_ecc(current, reference, policy, subject, contract)
+
+    assert result.reason_codes == ()
+    assert result.alignment is not None
+    assert result.alignment.state == "ALIGNED"
+    assert result.alignment.reprojection_error_px <= 1.0
+
+
+def test_subject_boundary_ecc_still_rejects_non_affine_subject_boundary_mismatch():
+    height, width = 900, 700
+    reference = np.full((height, width, 3), 220, dtype=np.uint8)
+    cv2.rectangle(reference, (230, 315), (470, 700), (18, 18, 18), -1)
+    subject = np.zeros((height, width), dtype=np.uint8)
+    cv2.rectangle(subject, (230, 315), (470, 700), 255, -1)
+    current = np.full_like(reference, 220)
+    # A trapezoid has a similar global Canny silhouette but no bounded affine
+    # hypothesis can make its top and bottom boundaries agree simultaneously.
+    cv2.fillConvexPoly(
+        current,
+        np.asarray([(285, 315), (415, 315), (470, 700), (230, 700)], dtype=np.int32),
+        (18, 18, 18),
+    )
+    policy = SimpleNamespace(
+        contour_anchor_region=SimpleNamespace(x=230, y=315, width=241, height=386),
+        canonical_width=width, canonical_height=height,
+        min_scale=0.6, max_scale=1.5, max_rotation_degrees=35.0,
+        max_translation_px=500.0, max_reprojection_error_px=8.0,
+    )
+    contract = SubjectAlignmentContract.model_validate({
+        "version": "subject-align-1.0", "method": "SUBJECT_CONTOUR_ECC_AFFINE",
+        "approvalState": "ENGINEERING_AUTO", "maskSource": "GOLDEN_SUBJECT_MASK",
+        "alignmentBandPx": 24, "heldOutBlockPx": 32, "maxIterations": 200,
+        "convergenceEpsilon": 0.00001, "minEccCorrelation": 0.2,
+        "maxHeldOutResidualPx": 8.0, "minHeldOutCoverageRatio": 0.35,
+        "maxResidualTranslationPx": 120.0, "maxResidualRotationDegrees": 15.0,
+        "maxResidualScaleDelta": 0.25, "maxResidualShear": 0.15,
+    })
+
+    result = _align_with_subject_ecc(current, reference, policy, subject, contract)
+
+    assert result.rgb is None
+    assert result.alignment is not None
+    assert result.alignment.state == "NOT_ALIGNED"
+    assert "SUBJECT_ALIGNMENT_HELD_OUT_RESIDUAL_HIGH" in result.reason_codes
+
+
+def test_feature_alignment_remains_first_when_contour_fallback_is_enabled():
+    reference = _reference()
+    current = _move_target(reference, np.float32([[1, 0, 91], [0, 1, 67]]))
+
+    result = OpenCvTargetAligner(allow_contour_anchor_alignment=True).align(
+        cv2.cvtColor(current, cv2.COLOR_BGR2RGB),
+        SimpleNamespace(target_alignment=_policy(
+            reference,
+            contourAnchorRegion={"x": 145, "y": 105, "width": 110, "height": 90},
+        )),
+    )
+
+    assert result.reason_codes == ()
+    assert result.alignment is not None
+    assert result.alignment.method == "TARGET_AFFINE"

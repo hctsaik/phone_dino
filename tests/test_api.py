@@ -8,9 +8,16 @@ from dataclasses import replace
 from fastapi.testclient import TestClient
 
 from phone_dino.app import create_app
+from phone_dino.analyzer import RUNTIME_DIGEST
 from phone_dino.config import Settings
 from phone_dino.production import NormalizedCapture, ProductionAnalyzer
-from phone_dino.contracts import AlignmentObservation
+from phone_dino.contracts import (
+    AlignmentObservation,
+    DimensionUncertaintyEvidence,
+    GoldenDimensionObservation,
+    MetricCalibrationEvidence,
+    PhysicalDimensionEvidence,
+)
 from phone_dino.security import digest_directory
 
 
@@ -41,12 +48,108 @@ def post(client, manifest, image, *, token="secret"):
     )
 
 
+def post_golden(client, manifest, image, *, token="secret"):
+    return client.post(
+        "/internal/v1/golden-dimension-assessments",
+        headers={"Authorization": f"Bearer {token}"},
+        files={
+            "manifest": ("manifest.json", json.dumps(manifest).encode(), "application/json"),
+            "image": ("golden.png", image, "image/png"),
+        },
+    )
+
+
+class GoldenDimensionAnalyzer:
+    def measure_golden_dimensions(self, request, _image):
+        return GoldenDimensionObservation(
+            schemaVersion="1.0",
+            requestId=request.request_id,
+            recipeId=request.recipe_id,
+            rawSha256=request.raw_sha256,
+            artifactPackageDigest="sha256:" + "a" * 64,
+            analyzerRuntimeVersion=RUNTIME_DIGEST,
+            calibrationBoardProfile="COMPACT_130X90_V1",
+            measurementPlane=request.measurement_plane,
+            physicalDimensions=PhysicalDimensionEvidence(
+                state="AVAILABLE",
+                disclaimerCode="ENGINEERING_DIMENSION_NOT_METROLOGY_PROOF",
+                method="CHARUCO_PLANE_GOLDEN_MASK_MIN_AREA_RECT_V1",
+                approvalState="ENGINEERING_AUTO",
+                coordinateSpace="CHARUCO_BOARD_PLANE_MM",
+                currentSubjectMaskSha256="b" * 64,
+                lengthMm=20.0,
+                widthMm=10.0,
+                areaMm2=200.0,
+                rotatedRectAngleDegrees=0.0,
+                calibration=MetricCalibrationEvidence(
+                    source="CHARUCO_BOARD_PLANE_V1",
+                    detectedCornerCount=18,
+                    inlierCornerCount=17,
+                    planeReprojectionErrorPx=0.4,
+                    pixelsPerMmX=10.0,
+                    pixelsPerMmY=10.0,
+                ),
+                uncertainty=DimensionUncertaintyEvidence(
+                    method="CONSERVATIVE_CALIBRATION_PLUS_SEGMENTATION_V1",
+                    linearMm=0.5,
+                    areaMm2=15.0,
+                    relativeLinear=0.025,
+                ),
+            ),
+        )
+
+
 def test_health_and_fixture_readiness(tmp_path):
     client = TestClient(create_app(settings(tmp_path)))
     assert client.get("/healthz").status_code == 200
     response = client.get("/readyz")
     assert response.status_code == 200
-    assert response.json() == {"status": "ready", "simulation": True}
+    assert response.json() == {
+        "status": "ready", "simulation": True, "analysisMode": "FIXTURE",
+        "supportedSchemas": ["1.0"], "capabilities": [],
+    }
+
+
+def test_golden_dimension_endpoint_returns_observation_without_decision(tmp_path, png_bytes):
+    raw_sha = hashlib.sha256(png_bytes).hexdigest()
+    manifest = {
+        "schemaVersion": "1.0",
+        "requestId": "golden-request-1",
+        "recipeId": "PM-ABC-001",
+        "rawSha256": raw_sha,
+        "contentType": "image/png",
+        "promptRegionNormalized": {"x": 0.1, "y": 0.1, "width": 0.8, "height": 0.8},
+        "measurementPlane": "TOP",
+    }
+    client = TestClient(create_app(settings(tmp_path), production_analyzer=GoldenDimensionAnalyzer()))
+
+    response = post_golden(client, manifest, png_bytes)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["rawSha256"] == raw_sha
+    assert body["measurementPlane"] == "TOP"
+    assert body["physicalDimensions"]["lengthMm"] == 20.0
+    assert body["physicalDimensions"]["method"] == "CHARUCO_PLANE_GOLDEN_MASK_MIN_AREA_RECT_V1"
+    assert "decision" not in body and "manufacturingAction" not in body
+
+
+def test_golden_dimension_endpoint_rejects_image_digest_mismatch(tmp_path, png_bytes):
+    manifest = {
+        "schemaVersion": "1.0",
+        "requestId": "golden-request-2",
+        "recipeId": "PM-ABC-001",
+        "rawSha256": "0" * 64,
+        "contentType": "image/png",
+        "promptRegionNormalized": {"x": 0.1, "y": 0.1, "width": 0.8, "height": 0.8},
+        "measurementPlane": "FRONT",
+    }
+    client = TestClient(create_app(settings(tmp_path), production_analyzer=GoldenDimensionAnalyzer()))
+
+    response = post_golden(client, manifest, png_bytes)
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "RAW_SHA256_MISMATCH"
 
 
 def test_analyze_fixture_returns_observation_not_decision(tmp_path, png_bytes, manifest_factory):
@@ -235,7 +338,7 @@ class DeterministicEmbedder:
         return [1.0, 0.0, 0.0]
 
 
-def production_setup(tmp_path, manifest, *, normalizer=None):
+def production_setup(tmp_path, manifest, *, normalizer=None, engineering: bool = False):
     weights = tmp_path / "weights.pth"
     weights.write_bytes(b"reviewed-model-weights")
     repo = tmp_path / "dinov2"
@@ -252,7 +355,7 @@ def production_setup(tmp_path, manifest, *, normalizer=None):
         "normalizationPipelineVersion": manifest["executionBundle"]["normalizationPipelineVersion"],
         "analyzerModelVersion": manifest["executionBundle"]["analyzerModelVersion"],
         "decisionPolicyVersion": manifest["executionBundle"]["decisionPolicyVersion"],
-        "analyzerRuntimeVersion": "sha256:" + hashlib.sha256(b"phone_dino:0.3.0").hexdigest(),
+        "analyzerRuntimeVersion": RUNTIME_DIGEST,
         "modelRepositoryVersion": repository_version,
         "boardInstallationVersion": manifest["executionBundle"]["boardInstallationVersion"],
         "modelWeightsSha256": "sha256:" + hashlib.sha256(weights.read_bytes()).hexdigest(),
@@ -271,11 +374,11 @@ def production_setup(tmp_path, manifest, *, normalizer=None):
     artifact.write_text(json.dumps(artifact_body, separators=(",", ":"), sort_keys=True), encoding="utf-8")
     artifact_digest = "sha256:" + hashlib.sha256(artifact.read_bytes()).hexdigest()
     manifest["artifactPackageDigest"] = artifact_digest
-    manifest["simulation"] = False
+    manifest["simulation"] = engineering
     configured = replace(
         settings(tmp_path, enabled=False), artifact_manifest=artifact,
         artifact_package_digest=artifact_digest, model_repo=repo, model_weights=weights,
-        model_repository_version=repository_version,
+        model_repository_version=repository_version, engineering_real_model_enabled=engineering,
     )
     analyzer = ProductionAnalyzer(
         configured, normalizer=normalizer or AcceptedNormalizer(), embedder=DeterministicEmbedder()
@@ -306,7 +409,10 @@ def target_alignment(reference):
 def test_production_analyzer_returns_version_bound_observation(tmp_path, png_bytes, manifest_factory):
     manifest = manifest_factory(png_bytes)
     client, _ = production_setup(tmp_path, manifest)
-    assert client.get("/readyz").json() == {"status": "ready", "simulation": False}
+    assert client.get("/readyz").json() == {
+        "status": "ready", "simulation": False, "analysisMode": "PRODUCTION",
+        "supportedSchemas": ["1.0", "1.1", "1.2", "1.3"], "capabilities": [],
+    }
 
     response = post(client, manifest, png_bytes)
 
@@ -319,6 +425,34 @@ def test_production_analyzer_returns_version_bound_observation(tmp_path, png_byt
     assert body["analysis"]["nearestGoldenId"] == "golden-near"
     assert 0 <= body["analysis"]["nearestGoldenDistance"] < body["analysis"]["globalDistance"] <= 2
     assert "decision" not in body and "manufacturingAction" not in body
+
+
+def test_engineering_real_mode_runs_production_analyzer_with_simulation_identity(tmp_path, png_bytes, manifest_factory):
+    manifest = manifest_factory(png_bytes)
+    client, _ = production_setup(tmp_path, manifest, engineering=True)
+    assert client.get("/readyz").json() == {
+        "status": "ready", "simulation": True, "analysisMode": "ENGINEERING_REAL_DINO",
+        "supportedSchemas": ["1.0", "1.1", "1.2", "1.3"], "capabilities": [],
+    }
+
+    response = post(client, manifest, png_bytes)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["simulation"] is True
+    assert body["analysis"]["state"] == "RUN"
+    assert body["analysis"]["nearestGoldenId"] == "golden-near"
+
+
+def test_engineering_real_mode_still_enforces_pinned_artifact_digest(tmp_path, png_bytes, manifest_factory):
+    manifest = manifest_factory(png_bytes)
+    client, _ = production_setup(tmp_path, manifest, engineering=True)
+    manifest["artifactPackageDigest"] = "sha256:" + "f" * 64
+
+    response = post(client, manifest, png_bytes)
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "ARTIFACT_PACKAGE_DIGEST_MISMATCH"
 
 
 def test_production_still_gate_recapture_never_embeds(tmp_path, png_bytes, manifest_factory):

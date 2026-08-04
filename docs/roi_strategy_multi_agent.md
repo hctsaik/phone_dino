@@ -37,4 +37,16 @@ Acceptance tests must cover normal captures, board-only and target-only movement
 - `phone_cv` derives a deterministic `roi-v1` candidate when a Golden template is created, stores its digest, and exposes a one-time owner confirmation endpoint. The live alignment view renders the candidate rectangle over the Golden ghost image before confirmation.
 - Candidates with invalid geometry, empty masks, or a greater-than-92% frame area are rejected with `INSPECTION_ROI_CANDIDATE_UNSAFE`; this is a safety bound, not semantic body segmentation.
 - `phone_dino` accepts the new immutable artifact schema `1.2`; readiness invokes `require_inspection_roi()` and fails closed on missing, mismatched, or alignment/held-out-overlapping ROI regions. Schema `1.1` remains readable only for compatibility and is not the new production contract.
-- The remaining qualification requirement is physical ChArUco capture validation with the actual device recipe; the current simulation evidence is not a Dino patch heatmap.
+- The remaining qualification requirement is physical target-alignment validation with the actual device Recipe; ChArUco is used when visible but is not mandatory when target-only gates pass. Simulation evidence is not a DINO patch heatmap.
+
+## Golden subject gate (2026-08-03)
+
+Artifact schema 1.5 separates the rectangular/polygon Inspection ROI from the actual Golden equipment pixels and additionally binds the ROI-only scorer input and recipe analysis profile:
+
+- Offline compiler runs `MOBILE_SAM_VIT_T_BOX_PROMPT` once per canonical Golden and binds the binary result to the Golden canonical SHA, MobileSAM repository/weights digests, and artifact digest.
+- Runtime never re-segments Current. It derives a padded support mask and boundary band from the immutable Golden mask, then replaces support-external Current pixels with the matching Golden pixels before DINO tile inference.
+- This makes the subject mask a spatial gate, not a defect classifier. A foreign object inside or touching the subject support remains available to DINO; distant background changes are suppressed.
+- `rawThresholdMask` is preserved separately for traceability. The public final candidate mask contains only components that passed minimum-area and maximum-region filtering, with `maskSemantics=RETAINED_CANDIDATES`.
+- Schema-1.1 observations expose hash-verified subject/support/boundary evidence. Missing or mismatched subject evidence is fail-closed/readiness-limited and must never silently fall back to a confident full-frame comparison.
+
+The implementation and exact v8 pins are documented in [Golden 主體分割與背景抑制設計](golden_subject_segmentation_design.md). SAM and DINO evidence remain explicitly not defect proof.
