@@ -28,6 +28,13 @@ CALIBRATION_BOARD_PROFILES: dict[str, dict[str, object]] = {
         "markerIds": list(range(100, 117)),
         "dictionary": "DICT_5X5_1000",
     },
+    "A4_METRIC_200X230_V1": {
+        "profileId": "A4_METRIC_200X230_V1",
+        "squaresX": 7, "squaresY": 9,
+        "squareLengthMm": 20.0, "markerLengthMm": 14.0,
+        "markerIds": list(range(100, 131)),
+        "dictionary": "DICT_5X5_1000",
+    },
     "CREDIT_CARD_85P6X54_V1": {
         "profileId": "CREDIT_CARD_85P6X54_V1",
         "squaresX": 5, "squaresY": 3,

@@ -14,7 +14,7 @@ contour geometry, or excessive uncertainty returns explicit `UNAVAILABLE`
 evidence without any mm values. See
 [Calibration + Segmentation physical dimension runtime](docs/physical_dimension_measurement.md).
 
-The active engineering pins are PhoneDINO `0.7.4`, artifact schema `1.8`, wire
+The active engineering pins are PhoneDINO `0.7.6`, artifact schema `1.8`, wire
 schema `1.5`, and PhoneCV profile schema `1.6`. Physical dimensions remain
 engineering evidence until a locked known-size real-device dataset is approved.
 
@@ -30,9 +30,11 @@ The service includes strict multipart contracts, service-token authentication, c
 
 ## Local engineering mode
 
+The coupled PhoneCV local runtime reads its canonical ports from `../phone_cv/config/local-engineering-topology.json`. The real `ENGINEERING_REAL_DINO` analyzer uses the configured `phoneDinoReal` port (`8082` in the checked-in topology); `8080` is fixture-only and must not be used as a real-analyzer health signal. Start the real analyzer with `start-engineering-real-dino.ps1`, then verify the entire Web/API/analyzer/Tailscale path with `../phone_cv/test-engineering-services.ps1`.
+
 要直接執行目前已綁定 `PM-ABC-001` Active Golden 的真實 DINOv2 工程流程，請參考 [Engineering Real DINO 實作與操作紀錄](docs/engineering_real_dino_quickstart.md)。以下 fixture 模式只用於 deterministic contract 測試。
 
-現行工程 pin 是 PhoneDINO `0.7.4`、artifact schema `1.8` 的 `engineering-real-dino-artifact-v21.json`，package digest `sha256:1535ee521488fd6f252e11baacd40f7c67ab201fae8ccf8896385724d6863139`。Runtime 與 PhoneCV 會同時驗證 analyzer runtime digest `sha256:db36e4c6a083714415218e623485f89e7a1fa2ae89dcbc46f5cabfe93d787a93`、paired-current subject contract、ROI-only scorer contract、Golden dimension baseline capability 和四角色 RecipeAnalysisProfile；候選尺寸優先使用合格 ChArUco，Current 沒有 ChArUco 時才使用已確認的 Golden 長寬比例估算。QR 與畫面中的尺不參與量測；任一 identity 不符皆 fail closed。
+現行工程 pin 是 PhoneDINO `0.7.6`、artifact schema `1.8` 的 `engineering-real-dino-artifact-v21.json`，package digest `sha256:287f6e72e7c477ea550162ee882c7ee4f27c5f4174600994ae95e0799ba81fd8`。Runtime 與 PhoneCV 會同時驗證 analyzer runtime digest `sha256:97c57f2330b678a0a0d65cafe64ed0a294379f462920887b09563ec69b0fd513`、paired-current subject contract、ROI-only scorer contract、Golden dimension baseline capability 和四角色 RecipeAnalysisProfile。whole-subject及候選區 mm 僅接受已實體驗證的 ChArUco board support；外框 ArUco、Golden 比例、背景卡或不共面的物體一律 fail closed。QR 與畫面中的尺不參與量測；任一 identity 不符皆 fail closed。
 
 Use Python 3.11 or 3.12:
 

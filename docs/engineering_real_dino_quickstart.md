@@ -29,11 +29,11 @@
 | Model | DINOv2 ViT-S/14 |
 | Weights SHA-256 | `sha256:b938bf1bc15cd2ec0feacfe3a1bb553fe8ea9ca46a7e1d8d00217f29aef60cd9` |
 | Model repository digest | `sha256:6f2d411cf095064c503259f7539f399ef6929059d58ca86230792ace634cd063` |
-| Phone Dino release | `0.7.4` |
-| Analyzer runtime digest | `sha256:db36e4c6a083714415218e623485f89e7a1fa2ae89dcbc46f5cabfe93d787a93` |
+| Phone Dino release | `0.7.6` |
+| Analyzer runtime digest | `sha256:97c57f2330b678a0a0d65cafe64ed0a294379f462920887b09563ec69b0fd513` |
 | Artifact schema | `1.8` |
 | Artifact | `engineering-real-dino-artifact-v21.json` |
-| Artifact digest | `sha256:1535ee521488fd6f252e11baacd40f7c67ab201fae8ccf8896385724d6863139` |
+| Artifact digest | `sha256:287f6e72e7c477ea550162ee882c7ee4f27c5f4174600994ae95e0799ba81fd8` |
 | Artifact ROI digest | `sha256:04fd2cb329af4fac5ecf7b7fda8ffdea08de9142d7b3bb60baeaddb2cdab9b73` |
 | Scorer input contract digest | `sha256:a99651d4f5ab2a6c0dbd95551c37894b94468232aa0897fd9e6db2ae17039019` |
 | Recipe analysis profile digest | `sha256:0f68790182e1505184c94c5505d4faa6cf7dfa369b469b67f7054c6e8dda54f1` |
@@ -64,9 +64,11 @@ Set-Location C:\code\claude\phone_cv
 驗證兩個服務：
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:8082/readyz
-Invoke-RestMethod http://127.0.0.1:4174/api/v1/recipes/PM-ABC-001/engineering-dino-readiness
+Set-Location C:\code\claude\phone_cv
+.\test-engineering-services.ps1
 ```
+
+本機埠號只由 `phone_cv/config/local-engineering-topology.json` 定義。現行實機 DINO 是 `8082`；`8080` 僅供 fixture 測試，不可作為實機服務的啟動或健康判斷依據。
 
 兩者都必須回報 `analysisMode: ENGINEERING_REAL_DINO` 與 ready。PhoneDino readiness 的 subject metadata 必須是 `MOBILE_SAM_VIT_T_BOX_PROMPT` 與上述 mask SHA，capabilities 必須包含 `GOLDEN_DIMENSION_BASELINE_V1`，並回報相同的 runtime、ROI、scorer-input 與 recipe-profile digests；PhoneCV profile 必須 pin 相同值。若任一 pin mismatch，代表兩個服務使用不同 artifact/profile；不要略過驗證，應以相同 v20 artifact 與 profile 重啟。PhoneDino 只有在模型與 runtime MobileSAM 載入、immutable Golden ROI patch cache 完整預算後才會 ready；任一 identity 不符都會 fail closed。
 

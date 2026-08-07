@@ -84,7 +84,7 @@ class ExecutionBundle(StrictModel):
 
 
 class GoldenRatioScaleReference(StrictModel):
-    """Server-bound, operator-confirmed Golden dimensions for no-board estimates."""
+    """Legacy request shape retained only to return a clear fail-closed error."""
 
     source: Literal["CONFIRMED_GOLDEN_DIMENSION_BASELINE"]
     template_id: Identifier = Field(alias="templateId")
@@ -103,6 +103,104 @@ class GoldenRatioScaleReference(StrictModel):
     def validate_long_short_order(self) -> "GoldenRatioScaleReference":
         if self.length_mm < self.width_mm:
             raise ValueError("Golden ratio lengthMm must be the long side")
+        return self
+
+
+class OffsetPlaneCameraIntrinsics(StrictModel):
+    """Server-bound native-image camera calibration for a metric capture."""
+
+    source: Literal["NATIVE_CAPTURE_V2", "BOARD_SELF_CALIBRATED_V1"] = Field(
+        default="NATIVE_CAPTURE_V2", alias="source",
+    )
+    image_width: Annotated[int, Field(alias="imageWidth", ge=64, le=100_000)]
+    image_height: Annotated[int, Field(alias="imageHeight", ge=64, le=100_000)]
+    fx_px: Annotated[float, Field(alias="fxPx", gt=0, le=1_000_000)]
+    fy_px: Annotated[float, Field(alias="fyPx", gt=0, le=1_000_000)]
+    cx_px: Annotated[float, Field(alias="cxPx", ge=-100_000, le=200_000)]
+    cy_px: Annotated[float, Field(alias="cyPx", ge=-100_000, le=200_000)]
+    distortion_coefficients: Annotated[
+        list[float], Field(default_factory=list, alias="distortionCoefficients", max_length=14),
+    ]
+
+
+class DepthOffsetEstimatePolicy(StrictModel):
+    """Server-owned fallback band for a non-coplanar foreground.
+
+    A rig can provide an exact fixed offset, a conservative prior, or allow a
+    relative-depth model to refine that prior.  The prior is intentionally
+    transmitted with the request so every estimate remains reproducible.
+    """
+
+    relative_depth_enabled: bool = Field(default=False, alias="relativeDepthEnabled")
+    lower95_mm: Annotated[float | None, Field(default=None, alias="lower95Mm", ge=0, le=10_000)] = None
+    upper95_mm: Annotated[float | None, Field(default=None, alias="upper95Mm", ge=0, le=10_000)] = None
+    model_systematic_error_mm: Annotated[
+        float, Field(default=8.0, alias="modelSystematicErrorMm", ge=0, le=10_000),
+    ]
+    dominant_plane_enabled: bool = Field(default=False, alias="dominantPlaneEnabled")
+    dominant_plane_half_width_mm: Annotated[
+        float, Field(default=8.0, alias="dominantPlaneHalfWidthMm", gt=0, le=1_000),
+    ]
+    minimum_dominant_plane_support_ratio: Annotated[
+        float, Field(default=0.35, alias="minimumDominantPlaneSupportRatio", gt=0, le=1),
+    ]
+    board_distance_ratio_center: Annotated[
+        float | None, Field(default=None, alias="boardDistanceRatioCenter", ge=0, lt=1),
+    ] = None
+    board_distance_ratio_lower95: Annotated[
+        float | None, Field(default=None, alias="boardDistanceRatioLower95", ge=0, lt=1),
+    ] = None
+    board_distance_ratio_upper95: Annotated[
+        float | None, Field(default=None, alias="boardDistanceRatioUpper95", ge=0, lt=1),
+    ] = None
+    board_distance_ratio_interval_kind: Literal[
+        "UNCALIBRATED_SCENARIO_ENVELOPE", "CALIBRATED_95",
+    ] | None = Field(default=None, alias="boardDistanceRatioIntervalKind")
+
+    @model_validator(mode="after")
+    def require_complete_interval(self) -> "DepthOffsetEstimatePolicy":
+        if (self.lower95_mm is None) != (self.upper95_mm is None):
+            raise ValueError("depth offset interval requires both lower95Mm and upper95Mm")
+        if self.lower95_mm is not None and self.upper95_mm is not None and self.lower95_mm > self.upper95_mm:
+            raise ValueError("depth offset lower95Mm cannot exceed upper95Mm")
+        ratios = (
+            self.board_distance_ratio_center,
+            self.board_distance_ratio_lower95,
+            self.board_distance_ratio_upper95,
+        )
+        if any(value is not None for value in ratios) and any(value is None for value in ratios):
+            raise ValueError("board distance ratio prior requires centre and both bounds")
+        if self.board_distance_ratio_center is not None and not (
+            self.board_distance_ratio_lower95 <= self.board_distance_ratio_center <= self.board_distance_ratio_upper95
+        ):
+            raise ValueError("board distance ratio centre must be inside its interval")
+        if self.board_distance_ratio_center is not None and self.board_distance_ratio_interval_kind is None:
+            raise ValueError("board distance ratio prior must state whether its interval is calibrated")
+        if self.board_distance_ratio_center is None and self.board_distance_ratio_interval_kind is not None:
+            raise ValueError("board distance ratio interval kind requires a ratio prior")
+        return self
+
+
+class OffsetPlaneCalibration(StrictModel):
+    """Immutable rig datum for a background-board metric projection."""
+
+    rig_id: Identifier = Field(alias="rigId")
+    front_plane_offset_mm: Annotated[float, Field(alias="frontPlaneOffsetMm", ge=0, le=10_000)]
+    camera: OffsetPlaneCameraIntrinsics
+    min_board_pnp_inliers: Annotated[int, Field(default=8, alias="minBoardPnpInliers", ge=4, le=100)]
+    max_board_pnp_reprojection_error_px: Annotated[
+        float, Field(default=1.5, alias="maxBoardPnpReprojectionErrorPx", gt=0, le=100),
+    ]
+    depth_estimate_policy: DepthOffsetEstimatePolicy = Field(
+        default_factory=DepthOffsetEstimatePolicy, alias="depthEstimatePolicy",
+    )
+
+    @model_validator(mode="after")
+    def center_offset_must_match_optional_prior(self) -> "OffsetPlaneCalibration":
+        lower = self.depth_estimate_policy.lower95_mm
+        upper = self.depth_estimate_policy.upper95_mm
+        if lower is not None and upper is not None and not lower <= self.front_plane_offset_mm <= upper:
+            raise ValueError("frontPlaneOffsetMm must be inside its depth estimate interval")
         return self
 
 
@@ -129,6 +227,9 @@ class AnalyzeRequest(StrictModel):
     golden_ratio_scale_reference: GoldenRatioScaleReference | None = Field(
         default=None, alias="goldenRatioScaleReference",
     )
+    offset_plane_calibration: OffsetPlaneCalibration | None = Field(
+        default=None, alias="offsetPlaneCalibration",
+    )
     simulation: bool
 
     @field_validator("deadline")
@@ -139,9 +240,9 @@ class AnalyzeRequest(StrictModel):
         return value
 
     @model_validator(mode="after")
-    def ratio_reference_requires_schema_1_5(self) -> "AnalyzeRequest":
-        if self.golden_ratio_scale_reference is not None and self.schema_version != "1.5":
-            raise ValueError("goldenRatioScaleReference requires schemaVersion 1.5")
+    def golden_ratio_reference_is_retired(self) -> "AnalyzeRequest":
+        if self.golden_ratio_scale_reference is not None:
+            raise ValueError("goldenRatioScaleReference is retired; Current metric evidence requires ChArUco")
         return self
 
 
@@ -263,7 +364,7 @@ class CandidateVerificationV2(StrictModel):
 
 
 class CandidateDimensionScaleEvidence(StrictModel):
-    source: Literal["CURRENT_CHARUCO_BOARD", "CONFIRMED_GOLDEN_DIMENSION_BASELINE"]
+    source: Literal["CURRENT_CHARUCO_BOARD"]
     template_id: Identifier | None = Field(default=None, alias="templateId")
     source_photo_sha256: Sha256 | None = Field(default=None, alias="sourcePhotoSha256")
     measurement_plane: Literal["TOP", "FRONT", "SIDE"] | None = Field(
@@ -279,20 +380,13 @@ class CandidateDimensionScaleEvidence(StrictModel):
             self.template_id, self.source_photo_sha256, self.measurement_plane,
             self.confirmation_source,
         )
-        if self.source == "CURRENT_CHARUCO_BOARD" and any(value is not None for value in bound):
+        if any(value is not None for value in bound):
             raise ValueError("Current ChArUco scale must not include Golden binding")
-        if self.source == "CONFIRMED_GOLDEN_DIMENSION_BASELINE" and any(
-            value is None for value in bound
-        ):
-            raise ValueError("Golden ratio scale requires complete baseline binding")
         return self
 
 
 class CandidateDimensionUncertaintyEvidence(StrictModel):
-    method: Literal[
-        "CONSERVATIVE_CALIBRATION_PLUS_CANDIDATE_BOUNDARY_V1",
-        "CONSERVATIVE_GOLDEN_RATIO_PLUS_ALIGNMENT_BOUNDARY_V1",
-    ]
+    method: Literal["CONSERVATIVE_CALIBRATION_PLUS_CANDIDATE_BOUNDARY_V1"]
     linear_mm: Annotated[float, Field(alias="linearMm", gt=0, le=10000)]
     area_mm2: Annotated[float, Field(alias="areaMm2", gt=0, le=100_000_000)]
     relative_linear: Annotated[float, Field(alias="relativeLinear", gt=0, le=1)]
@@ -304,16 +398,11 @@ class CandidatePhysicalDimensionEvidence(StrictModel):
         alias="disclaimerCode",
     )
     reason_code: str | None = Field(default=None, alias="reasonCode", max_length=160)
-    method: Literal[
-        "CHARUCO_PLANE_CANDIDATE_MASK_MIN_AREA_RECT_V1",
-        "GOLDEN_BASELINE_RATIO_CANDIDATE_MASK_MIN_AREA_RECT_V1",
-    ] | None = None
-    approval_state: Literal["ENGINEERING_AUTO", "GOLDEN_RATIO_ESTIMATE"] | None = Field(
+    method: Literal["CHARUCO_PLANE_CANDIDATE_MASK_MIN_AREA_RECT_V1"] | None = None
+    approval_state: Literal["ENGINEERING_AUTO"] | None = Field(
         default=None, alias="approvalState",
     )
-    coordinate_space: Literal[
-        "CHARUCO_BOARD_PLANE_MM", "TARGET_CANONICAL_GOLDEN_RATIO_MM",
-    ] | None = Field(default=None, alias="coordinateSpace")
+    coordinate_space: Literal["CHARUCO_BOARD_PLANE_MM"] | None = Field(default=None, alias="coordinateSpace")
     candidate_mask_sha256: Sha256 | None = Field(default=None, alias="candidateMaskSha256")
     length_mm: Annotated[float | None, Field(alias="lengthMm", gt=0, le=100000)] = None
     width_mm: Annotated[float | None, Field(alias="widthMm", gt=0, le=100000)] = None
@@ -498,7 +587,11 @@ class BoundaryDifferenceEvidence(StrictModel):
 
 
 class MetricCalibrationEvidence(StrictModel):
-    source: Literal["CHARUCO_BOARD_PLANE_V1"]
+    source: Literal[
+        "CHARUCO_BOARD_PLANE_V1", "BACKGROUND_BOARD_PNP_FRONT_OFFSET_V1",
+        "BACKGROUND_BOARD_PNP_SELF_CALIBRATED_INTRINSICS_V1",
+    ]
+    fiducial: Literal["CHARUCO_CORNERS", "OUTER_ARUCO_CORNERS"] | None = None
     detected_corner_count: Annotated[int, Field(alias="detectedCornerCount", ge=4, le=10000)]
     inlier_corner_count: Annotated[int, Field(alias="inlierCornerCount", ge=4, le=10000)]
     plane_reprojection_error_px: Annotated[
@@ -513,10 +606,77 @@ class MetricCalibrationEvidence(StrictModel):
 
 
 class DimensionUncertaintyEvidence(StrictModel):
-    method: Literal["CONSERVATIVE_CALIBRATION_PLUS_SEGMENTATION_V1"]
+    method: Literal[
+        "CONSERVATIVE_CALIBRATION_PLUS_SEGMENTATION_V1",
+        "BOARD_POSE_DEPTH_INTERVAL_PLUS_SEGMENTATION_V1",
+    ]
     linear_mm: Annotated[float, Field(alias="linearMm", gt=0, le=10000)]
     area_mm2: Annotated[float, Field(alias="areaMm2", gt=0, le=100_000_000)]
-    relative_linear: Annotated[float, Field(alias="relativeLinear", gt=0, le=1)]
+    relative_linear: Annotated[float, Field(alias="relativeLinear", gt=0, le=10)]
+    length_lower95_mm: Annotated[float | None, Field(alias="lengthLower95Mm", gt=0, le=100_000)] = None
+    length_upper95_mm: Annotated[float | None, Field(alias="lengthUpper95Mm", gt=0, le=100_000)] = None
+    width_lower95_mm: Annotated[float | None, Field(alias="widthLower95Mm", gt=0, le=100_000)] = None
+    width_upper95_mm: Annotated[float | None, Field(alias="widthUpper95Mm", gt=0, le=100_000)] = None
+    interval_kind: Literal[
+        "FIXED_RIG_TOLERANCE", "UNCALIBRATED_SCENARIO_ENVELOPE",
+        "MODEL_UNVALIDATED_INTERVAL", "CALIBRATED_95",
+    ] | None = Field(default=None, alias="intervalKind")
+
+    @model_validator(mode="after")
+    def validate_interval(self) -> "DimensionUncertaintyEvidence":
+        values = (
+            self.length_lower95_mm, self.length_upper95_mm,
+            self.width_lower95_mm, self.width_upper95_mm,
+        )
+        if any(value is not None for value in values) and any(value is None for value in values):
+            raise ValueError("dimension interval requires length and width lower/upper bounds")
+        if self.length_lower95_mm is not None and self.length_upper95_mm is not None:
+            if self.length_lower95_mm > self.length_upper95_mm or self.width_lower95_mm > self.width_upper95_mm:
+                raise ValueError("dimension interval lower bound cannot exceed upper bound")
+            if self.method == "BOARD_POSE_DEPTH_INTERVAL_PLUS_SEGMENTATION_V1" and self.interval_kind is None:
+                raise ValueError("background-board dimension interval requires its confidence kind")
+        elif self.interval_kind is not None:
+            raise ValueError("interval kind requires a dimension interval")
+        return self
+
+
+class DepthOffsetEstimateEvidence(StrictModel):
+    source: Literal[
+        "FIXED_RIG_DATUM_V1",
+        "BOARD_POSE_UNCALIBRATED_PRIOR_V1",
+        "RELATIVE_DEPTH_BOARD_CALIBRATED_V1",
+    ]
+    offset_mm: Annotated[float, Field(alias="offsetMm", ge=0, le=10_000)]
+    lower95_mm: Annotated[float, Field(alias="lower95Mm", ge=0, le=10_000)]
+    upper95_mm: Annotated[float, Field(alias="upper95Mm", ge=0, le=10_000)]
+    interval_kind: Literal[
+        "FIXED_RIG_TOLERANCE", "UNCALIBRATED_SCENARIO_ENVELOPE",
+        "MODEL_UNVALIDATED_INTERVAL", "CALIBRATED_95",
+    ] = Field(alias="intervalKind")
+    board_fit_p95_mm: Annotated[float | None, Field(default=None, alias="boardFitP95Mm", ge=0, le=10_000)] = None
+    subject_spread_p95_mm: Annotated[float | None, Field(default=None, alias="subjectSpreadP95Mm", ge=0, le=10_000)] = None
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> "DepthOffsetEstimateEvidence":
+        if not self.lower95_mm <= self.offset_mm <= self.upper95_mm:
+            raise ValueError("depth offset estimate must be inside its stated interval")
+        if self.source == "RELATIVE_DEPTH_BOARD_CALIBRATED_V1" and (
+            self.board_fit_p95_mm is None or self.subject_spread_p95_mm is None
+        ):
+            raise ValueError("relative depth estimate requires fit and subject spread evidence")
+        if self.source != "RELATIVE_DEPTH_BOARD_CALIBRATED_V1" and (
+            self.board_fit_p95_mm is not None or self.subject_spread_p95_mm is not None
+        ):
+            raise ValueError("non-relative depth estimate cannot claim model residuals")
+        if self.source == "FIXED_RIG_DATUM_V1" and self.interval_kind not in ("FIXED_RIG_TOLERANCE", "CALIBRATED_95"):
+            raise ValueError("fixed rig estimate has an invalid interval kind")
+        if self.source == "BOARD_POSE_UNCALIBRATED_PRIOR_V1" and self.interval_kind != "UNCALIBRATED_SCENARIO_ENVELOPE":
+            raise ValueError("board-pose prior must be labeled as uncalibrated")
+        if self.source == "RELATIVE_DEPTH_BOARD_CALIBRATED_V1" and self.interval_kind not in (
+            "MODEL_UNVALIDATED_INTERVAL", "CALIBRATED_95",
+        ):
+            raise ValueError("relative depth estimate has an invalid interval kind")
+        return self
 
 
 class PhysicalDimensionEvidence(StrictModel):
@@ -528,14 +688,21 @@ class PhysicalDimensionEvidence(StrictModel):
     method: Literal[
         "CHARUCO_PLANE_CURRENT_MASK_MIN_AREA_RECT_V1",
         "CHARUCO_PLANE_GOLDEN_MASK_MIN_AREA_RECT_V1",
+        "BACKGROUND_BOARD_PNP_FRONT_OFFSET_MASK_MIN_AREA_RECT_V1",
+        "BACKGROUND_BOARD_PNP_FRONT_OFFSET_BODY_CROSS_SECTION_V1",
     ] | None = None
     approval_state: Literal["ENGINEERING_AUTO", "APPROVED"] | None = Field(
         default=None, alias="approvalState",
     )
-    coordinate_space: Literal["CHARUCO_BOARD_PLANE_MM"] | None = Field(
+    coordinate_space: Literal["CHARUCO_BOARD_PLANE_MM", "BACKGROUND_BOARD_FRONT_OFFSET_PLANE_MM"] | None = Field(
         default=None, alias="coordinateSpace",
     )
     current_subject_mask_sha256: Sha256 | None = Field(default=None, alias="currentSubjectMaskSha256")
+    # Background-board metrics use a source-resolution mask while the paired
+    # subject evidence is canonical-resolution. Keep both digests so the API
+    # can bind the metric result to the Current subject gate without losing the
+    # exact mask that supplied the projected contour.
+    metric_subject_mask_sha256: Sha256 | None = Field(default=None, alias="metricSubjectMaskSha256")
     length_mm: Annotated[float | None, Field(alias="lengthMm", gt=0, le=100000)] = None
     width_mm: Annotated[float | None, Field(alias="widthMm", gt=0, le=100000)] = None
     area_mm2: Annotated[float | None, Field(alias="areaMm2", gt=0, le=100_000_000)] = None
@@ -544,6 +711,7 @@ class PhysicalDimensionEvidence(StrictModel):
     ] = None
     calibration: MetricCalibrationEvidence | None = None
     uncertainty: DimensionUncertaintyEvidence | None = None
+    depth_offset_estimate: DepthOffsetEstimateEvidence | None = Field(default=None, alias="depthOffsetEstimate")
 
     def model_post_init(self, __context: object) -> None:
         values = (
@@ -552,13 +720,18 @@ class PhysicalDimensionEvidence(StrictModel):
             self.calibration, self.uncertainty,
         )
         if self.state == "UNAVAILABLE":
-            if any(value is not None for value in values):
+            if any(value is not None for value in values) or self.depth_offset_estimate is not None:
                 raise ValueError("UNAVAILABLE physical dimensions must not include metric values")
             if not self.reason_code:
                 raise ValueError("UNAVAILABLE physical dimensions require reasonCode")
         else:
             if any(value is None for value in values):
                 raise ValueError("AVAILABLE physical dimensions require complete metric evidence")
+            if (
+                self.method == "BACKGROUND_BOARD_PNP_FRONT_OFFSET_BODY_CROSS_SECTION_V1"
+                and self.metric_subject_mask_sha256 is None
+            ):
+                raise ValueError("background-board dimensions require source metric mask evidence")
             if self.reason_code is not None:
                 raise ValueError("AVAILABLE physical dimensions must not include reasonCode")
             if self.length_mm is not None and self.width_mm is not None and self.length_mm < self.width_mm:
@@ -566,7 +739,7 @@ class PhysicalDimensionEvidence(StrictModel):
 
 
 class GoldenDimensionRequest(StrictModel):
-    """Server-owned request to establish one Golden planar dimension baseline."""
+    """Server-owned request to establish one Golden planar baseline and optional POC estimate."""
 
     schema_version: Literal["1.0"] = Field(alias="schemaVersion")
     request_id: Identifier = Field(alias="requestId")
@@ -578,6 +751,12 @@ class GoldenDimensionRequest(StrictModel):
     board_candidates: Annotated[
         list[GoldenDimensionBoardCandidate], Field(alias="boardCandidates", max_length=8),
     ] = Field(default_factory=list)
+    # This does not relax the formal ChArUco-plane baseline.  It permits a
+    # separately labelled foreground-offset estimate when POC has a registered
+    # board/foreground datum or an explicitly wide depth prior.
+    offset_plane_calibration: OffsetPlaneCalibration | None = Field(
+        default=None, alias="offsetPlaneCalibration",
+    )
 
     @model_validator(mode="after")
     def validate_board_candidates(self) -> "GoldenDimensionRequest":
@@ -604,9 +783,26 @@ class GoldenDimensionObservation(StrictModel):
     )
     measurement_plane: Literal["TOP", "FRONT", "SIDE"] = Field(alias="measurementPlane")
     physical_dimensions: PhysicalDimensionEvidence = Field(alias="physicalDimensions")
+    background_offset_plane_dimensions: PhysicalDimensionEvidence | None = Field(
+        default=None, alias="backgroundOffsetPlaneDimensions",
+    )
     subject_mask_png_base64: str | None = Field(
         default=None, alias="subjectMaskPngBase64", max_length=4_000_000,
     )
+
+    @model_validator(mode="after")
+    def validate_background_offset_estimate(self) -> "GoldenDimensionObservation":
+        estimate = self.background_offset_plane_dimensions
+        if estimate is None or estimate.state == "UNAVAILABLE":
+            return self
+        if estimate.method not in {
+            "BACKGROUND_BOARD_PNP_FRONT_OFFSET_MASK_MIN_AREA_RECT_V1",
+            "BACKGROUND_BOARD_PNP_FRONT_OFFSET_BODY_CROSS_SECTION_V1",
+        }:
+            raise ValueError("Golden background estimate must use a background-board offset-plane method")
+        if estimate.coordinate_space != "BACKGROUND_BOARD_FRONT_OFFSET_PLANE_MM":
+            raise ValueError("Golden background estimate must use the front-offset coordinate space")
+        return self
 
 
 class SpatialDifferenceEvidence(StrictModel):

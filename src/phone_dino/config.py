@@ -36,6 +36,12 @@ class Settings:
     subject_segmenter_repo: Path | None = None
     subject_segmenter_weights: Path | None = None
     subject_segmenter_device: str = "cpu"
+    relative_depth_repo: Path | None = None
+    relative_depth_weights: Path | None = None
+    relative_depth_encoder: str = "vits"
+    relative_depth_device: str = "cpu"
+    relative_depth_repository_version: str | None = None
+    relative_depth_weights_sha256: str | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -45,6 +51,8 @@ class Settings:
         model_weights = os.getenv("PHONE_DINO_MODEL_WEIGHTS")
         subject_segmenter_repo = os.getenv("PHONE_DINO_SUBJECT_SEGMENTER_REPO")
         subject_segmenter_weights = os.getenv("PHONE_DINO_SUBJECT_SEGMENTER_WEIGHTS")
+        relative_depth_repo = os.getenv("PHONE_DINO_DEPTH_ANYTHING_REPO")
+        relative_depth_weights = os.getenv("PHONE_DINO_DEPTH_ANYTHING_WEIGHTS")
         return cls(
             service_token=os.getenv("PHONE_DINO_SERVICE_TOKEN"),
             fixture_enabled=_bool_env("PHONE_DINO_ENABLE_ENGINEERING_FIXTURES"),
@@ -71,4 +79,10 @@ class Settings:
                 Path(subject_segmenter_weights).resolve() if subject_segmenter_weights else None
             ),
             subject_segmenter_device=os.getenv("PHONE_DINO_SUBJECT_SEGMENTER_DEVICE", "cpu"),
+            relative_depth_repo=(Path(relative_depth_repo).resolve() if relative_depth_repo else None),
+            relative_depth_weights=(Path(relative_depth_weights).resolve() if relative_depth_weights else None),
+            relative_depth_encoder=os.getenv("PHONE_DINO_DEPTH_ANYTHING_ENCODER", "vits"),
+            relative_depth_device=os.getenv("PHONE_DINO_DEPTH_ANYTHING_DEVICE", "cpu"),
+            relative_depth_repository_version=os.getenv("PHONE_DINO_DEPTH_ANYTHING_REPOSITORY_VERSION"),
+            relative_depth_weights_sha256=os.getenv("PHONE_DINO_DEPTH_ANYTHING_WEIGHTS_SHA256"),
         )

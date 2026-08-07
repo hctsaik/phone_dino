@@ -13,6 +13,7 @@ from phone_dino.config import Settings
 from phone_dino.production import NormalizedCapture, ProductionAnalyzer
 from phone_dino.contracts import (
     AlignmentObservation,
+    DepthOffsetEstimateEvidence,
     DimensionUncertaintyEvidence,
     GoldenDimensionObservation,
     MetricCalibrationEvidence,
@@ -66,6 +67,48 @@ def post_golden(client, manifest, image, *, token="secret"):
 
 class GoldenDimensionAnalyzer:
     def measure_golden_dimensions(self, request, _image):
+        background_estimate = None
+        if request.offset_plane_calibration is not None:
+            background_estimate = PhysicalDimensionEvidence(
+                state="AVAILABLE",
+                disclaimerCode="ENGINEERING_DIMENSION_NOT_METROLOGY_PROOF",
+                method="BACKGROUND_BOARD_PNP_FRONT_OFFSET_BODY_CROSS_SECTION_V1",
+                approvalState="ENGINEERING_AUTO",
+                coordinateSpace="BACKGROUND_BOARD_FRONT_OFFSET_PLANE_MM",
+                currentSubjectMaskSha256=hashlib.sha256(_GOLDEN_MASK_PNG).hexdigest(),
+                metricSubjectMaskSha256=hashlib.sha256(_GOLDEN_MASK_PNG).hexdigest(),
+                lengthMm=186.8,
+                widthMm=67.27,
+                areaMm2=11034.5,
+                rotatedRectAngleDegrees=-2.54,
+                calibration=MetricCalibrationEvidence(
+                    source="BACKGROUND_BOARD_PNP_SELF_CALIBRATED_INTRINSICS_V1",
+                    fiducial="OUTER_ARUCO_CORNERS",
+                    detectedCornerCount=24,
+                    inlierCornerCount=17,
+                    planeReprojectionErrorPx=3.54,
+                    pixelsPerMmX=8.92,
+                    pixelsPerMmY=8.92,
+                ),
+                uncertainty=DimensionUncertaintyEvidence(
+                    method="BOARD_POSE_DEPTH_INTERVAL_PLUS_SEGMENTATION_V1",
+                    linearMm=15.31,
+                    areaMm2=1724.17,
+                    relativeLinear=0.228,
+                    lengthLower95Mm=171.49,
+                    lengthUpper95Mm=202.1,
+                    widthLower95Mm=60.97,
+                    widthUpper95Mm=73.58,
+                    intervalKind="UNCALIBRATED_SCENARIO_ENVELOPE",
+                ),
+                depthOffsetEstimate=DepthOffsetEstimateEvidence(
+                    source="BOARD_POSE_UNCALIBRATED_PRIOR_V1",
+                    offsetMm=70.0,
+                    lower95Mm=45.0,
+                    upper95Mm=95.0,
+                    intervalKind="UNCALIBRATED_SCENARIO_ENVELOPE",
+                ),
+            )
         return GoldenDimensionObservation(
             schemaVersion="1.0",
             requestId=request.request_id,
@@ -101,6 +144,7 @@ class GoldenDimensionAnalyzer:
                     relativeLinear=0.025,
                 ),
             ),
+            backgroundOffsetPlaneDimensions=background_estimate,
             subjectMaskPngBase64=base64.b64encode(_GOLDEN_MASK_PNG).decode("ascii"),
         )
 
@@ -139,6 +183,87 @@ def test_golden_dimension_endpoint_returns_observation_without_decision(tmp_path
     assert body["physicalDimensions"]["method"] == "CHARUCO_PLANE_GOLDEN_MASK_MIN_AREA_RECT_V1"
     assert base64.b64decode(body["subjectMaskPngBase64"]) == _GOLDEN_MASK_PNG
     assert "decision" not in body and "manufacturingAction" not in body
+
+
+def test_golden_dimension_endpoint_keeps_background_offset_estimate_separate_from_planar_baseline(tmp_path, png_bytes):
+    manifest = {
+        "schemaVersion": "1.0",
+        "requestId": "golden-offset-request-1",
+        "recipeId": "PM-ABC-001",
+        "rawSha256": hashlib.sha256(png_bytes).hexdigest(),
+        "contentType": "image/png",
+        "promptRegionNormalized": {"x": 0.1, "y": 0.1, "width": 0.8, "height": 0.8},
+        "measurementPlane": "TOP",
+        "offsetPlaneCalibration": {
+            "rigId": "POC-RIG-01",
+            "frontPlaneOffsetMm": 70.0,
+            "camera": {
+                "source": "BOARD_SELF_CALIBRATED_V1",
+                "imageWidth": 64,
+                "imageHeight": 64,
+                "fxPx": 64.0,
+                "fyPx": 64.0,
+                "cxPx": 32.0,
+                "cyPx": 32.0,
+                "distortionCoefficients": [],
+            },
+            "minBoardPnpInliers": 8,
+            "maxBoardPnpReprojectionErrorPx": 1.5,
+            "depthEstimatePolicy": {
+                "relativeDepthEnabled": False,
+                "lower95Mm": 45.0,
+                "upper95Mm": 95.0,
+                "modelSystematicErrorMm": 12.0,
+            },
+        },
+    }
+    client = TestClient(create_app(settings(tmp_path), production_analyzer=GoldenDimensionAnalyzer()))
+
+    response = post_golden(client, manifest, png_bytes)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["physicalDimensions"]["method"] == "CHARUCO_PLANE_GOLDEN_MASK_MIN_AREA_RECT_V1"
+    assert body["backgroundOffsetPlaneDimensions"] == {
+        "state": "AVAILABLE",
+        "disclaimerCode": "ENGINEERING_DIMENSION_NOT_METROLOGY_PROOF",
+        "method": "BACKGROUND_BOARD_PNP_FRONT_OFFSET_BODY_CROSS_SECTION_V1",
+        "approvalState": "ENGINEERING_AUTO",
+        "coordinateSpace": "BACKGROUND_BOARD_FRONT_OFFSET_PLANE_MM",
+        "currentSubjectMaskSha256": hashlib.sha256(_GOLDEN_MASK_PNG).hexdigest(),
+        "metricSubjectMaskSha256": hashlib.sha256(_GOLDEN_MASK_PNG).hexdigest(),
+        "lengthMm": 186.8,
+        "widthMm": 67.27,
+        "areaMm2": 11034.5,
+        "rotatedRectAngleDegrees": -2.54,
+        "calibration": {
+            "source": "BACKGROUND_BOARD_PNP_SELF_CALIBRATED_INTRINSICS_V1",
+            "fiducial": "OUTER_ARUCO_CORNERS",
+            "detectedCornerCount": 24,
+            "inlierCornerCount": 17,
+            "planeReprojectionErrorPx": 3.54,
+            "pixelsPerMmX": 8.92,
+            "pixelsPerMmY": 8.92,
+        },
+        "uncertainty": {
+            "method": "BOARD_POSE_DEPTH_INTERVAL_PLUS_SEGMENTATION_V1",
+            "linearMm": 15.31,
+            "areaMm2": 1724.17,
+            "relativeLinear": 0.228,
+            "lengthLower95Mm": 171.49,
+            "lengthUpper95Mm": 202.1,
+            "widthLower95Mm": 60.97,
+            "widthUpper95Mm": 73.58,
+            "intervalKind": "UNCALIBRATED_SCENARIO_ENVELOPE",
+        },
+        "depthOffsetEstimate": {
+            "source": "BOARD_POSE_UNCALIBRATED_PRIOR_V1",
+            "offsetMm": 70.0,
+            "lower95Mm": 45.0,
+            "upper95Mm": 95.0,
+            "intervalKind": "UNCALIBRATED_SCENARIO_ENVELOPE",
+        },
+    }
 
 
 def test_golden_dimension_endpoint_rejects_image_digest_mismatch(tmp_path, png_bytes):

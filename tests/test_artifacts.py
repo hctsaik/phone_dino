@@ -145,3 +145,18 @@ def test_phonecv_charuco_profile_pins_exact_marker_ids():
             **board.model_dump(by_alias=True),
             "markerIds": list(range(100, 116)),
         })
+
+
+def test_phonecv_a4_metric_profile_has_the_complete_7_by_9_charuco_layout():
+    board = CharucoBoard.model_validate({
+        "profileId": "A4_METRIC_200X230_V1",
+        "squaresX": 7, "squaresY": 9,
+        "squareLengthMm": 20.0, "markerLengthMm": 14.0,
+        "markerIds": list(range(100, 131)),
+        "dictionary": "DICT_5X5_1000",
+        "canonicalWidth": 896, "canonicalHeight": 896,
+    })
+
+    assert board.profile_id == "A4_METRIC_200X230_V1"
+    assert board.marker_ids == list(range(100, 131))
+    assert len(board.marker_ids) == 31

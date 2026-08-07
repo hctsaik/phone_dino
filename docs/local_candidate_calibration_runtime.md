@@ -1,6 +1,6 @@
 # 局部候選校正與結構確認
 
-> 目前 active engineering pins 已升級為 PhoneDINO `0.7.4`、artifact schema
+> 目前 active engineering pins 已升級為 PhoneDINO `0.7.6`、artifact schema
 > `1.8`、wire schema `1.5`、PhoneCV profile `1.6`、
 > `engineering-real-dino-artifact-v21.json`。候選確認方法仍為
 > `DINO_CROP_COSINE_LOCAL_STRUCTURE_V2`；新增尺寸能力詳見
