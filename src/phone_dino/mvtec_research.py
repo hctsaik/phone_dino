@@ -11,15 +11,18 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import platform
 import random
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
-from PIL import Image
+from PIL import Image, __version__ as PILLOW_VERSION
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-CAMERA_AUGMENTATION_SCHEMA = "phone-dino.mvtec-ad-normal-augmentation/1.0"
+CAMERA_AUGMENTATION_SCHEMA = "phone-dino.mvtec-ad-normal-augmentation/1.1"
 CAMERA_RECIPE_SCHEMA = "phone-dino.mvtec-ad-camera-recipe/1.0"
 NORMAL_AUGMENTATION_ROLES = frozenset({"FIT", "THRESHOLD_TUNING"})
 
@@ -94,6 +97,62 @@ def _document_digest(document: dict[str, Any], field: str) -> str:
     return canonical_json_sha256(without_digest)
 
 
+def _camera_recipe_seed_anchor(recipe: dict[str, Any], recipe_sha256: str) -> str:
+    """Return the immutable seed source for a controlled recipe experiment."""
+
+    anchor = recipe.get("samplingSeedAnchor", recipe_sha256)
+    if not isinstance(anchor, str) or len(anchor) != 71 or not anchor.startswith("sha256:"):
+        raise MvtecResearchError("samplingSeedAnchor must be a sha256 digest")
+    try:
+        int(anchor[7:], 16)
+    except ValueError as error:
+        raise MvtecResearchError("samplingSeedAnchor must be a sha256 digest") from error
+    return anchor
+
+
+def _resolve_recipe_path(value: str) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else REPOSITORY_ROOT / path
+
+
+def _generator_provenance() -> dict[str, Any]:
+    """Capture the code and runtime that materialized an external package."""
+
+    try:
+        revision = subprocess.run(
+            ["git", "-C", str(REPOSITORY_ROOT), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        worktree_clean = not subprocess.run(
+            ["git", "-C", str(REPOSITORY_ROOT), "status", "--porcelain"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):  # pragma: no cover - Git availability is environment-specific
+        revision = None
+        worktree_clean = None
+    try:
+        import cv2
+        import numpy as np
+    except ImportError as error:  # pragma: no cover - generation itself requires these dependencies
+        raise RuntimeError("MVTec camera augmentation requires the optional vision dependencies") from error
+    entrypoint = REPOSITORY_ROOT / "tools" / "generate_mvtec_ad_normal_augmentations.py"
+    return {
+        "generatorModuleSha256": sha256_file(Path(__file__)),
+        "generatorEntrypointSha256": sha256_file(entrypoint),
+        "gitRevision": revision,
+        "gitWorktreeClean": worktree_clean,
+        "python": sys.version,
+        "platform": platform.platform(),
+        "pillowVersion": PILLOW_VERSION,
+        "opencvVersion": cv2.__version__,
+        "numpyVersion": np.__version__,
+    }
+
+
 def load_camera_recipe(recipe_path: Path) -> tuple[dict[str, Any], str]:
     """Load the bounded generic camera/lighting recipe used by this protocol."""
 
@@ -131,7 +190,18 @@ def load_camera_recipe(recipe_path: Path) -> tuple[dict[str, Any], str]:
     quality_max = _require_finite_number(encoding, "jpegQualityMax")
     if not quality_min.is_integer() or not quality_max.is_integer() or not (90 <= quality_min <= quality_max <= 98):
         raise MvtecResearchError("JPEG quality must be an integer range within 90..98")
-    return recipe, sha256_file(recipe_path)
+    recipe_sha256 = sha256_file(recipe_path)
+    _camera_recipe_seed_anchor(recipe, recipe_sha256)
+    off_axis_lens_shading = recipe.get("offAxisLensShading")
+    if off_axis_lens_shading is not None:
+        lens = _require_mapping(recipe, "offAxisLensShading")
+        maximum_strength = _require_finite_number(lens, "maxStrength")
+        maximum_offset = _require_finite_number(lens, "maxCenterOffsetFraction")
+        if not 0.0 <= maximum_strength <= 0.04:
+            raise MvtecResearchError("offAxisLensShading maxStrength is outside the approved generic-simulation range")
+        if not 0.0 <= maximum_offset <= 0.25:
+            raise MvtecResearchError("offAxisLensShading maxCenterOffsetFraction is outside the approved generic-simulation range")
+    return recipe, recipe_sha256
 
 
 def derive_augmentation_seed(recipe_sha256: str, parent_case_id: str, parent_source_sha256: str, variant_id: int) -> int:
@@ -145,7 +215,8 @@ def sample_camera_parameters(recipe: dict[str, Any], *, recipe_sha256: str, pare
                              parent_source_sha256: str, variant_id: int) -> dict[str, Any]:
     """Return stable generic phone-capture perturbations for one normal input."""
 
-    seed = derive_augmentation_seed(recipe_sha256, parent_case_id, parent_source_sha256, variant_id)
+    sampling_seed_anchor = _camera_recipe_seed_anchor(recipe, recipe_sha256)
+    seed = derive_augmentation_seed(sampling_seed_anchor, parent_case_id, parent_source_sha256, variant_id)
     rng = random.Random(seed)
     geometry = _require_mapping(recipe, "geometry")
     photometry = _require_mapping(recipe, "photometry")
@@ -157,7 +228,7 @@ def sample_camera_parameters(recipe: dict[str, Any], *, recipe_sha256: str, pare
     def rounded(value: float) -> float:
         return round(value, 8)
 
-    return {
+    parameters = {
         "seed": str(seed),
         "rotationDegrees": rounded(symmetric(geometry, "maxRotationDegrees")),
         "scale": rounded(1.0 + symmetric(geometry, "maxScaleDelta")),
@@ -175,6 +246,15 @@ def sample_camera_parameters(recipe: dict[str, Any], *, recipe_sha256: str, pare
         "jpegQuality": int(rng.randint(int(encoding["jpegQualityMin"]), int(encoding["jpegQualityMax"]))),
         "noiseSeed": str(rng.getrandbits(64)),
     }
+    off_axis_lens_shading = recipe.get("offAxisLensShading")
+    if off_axis_lens_shading is not None:
+        lens = _require_mapping(recipe, "offAxisLensShading")
+        parameters |= {
+            "offAxisLensShadingStrength": rounded(rng.uniform(0.0, _require_finite_number(lens, "maxStrength"))),
+            "lensShadingCenterOffsetXFraction": rounded(symmetric(lens, "maxCenterOffsetFraction")),
+            "lensShadingCenterOffsetYFraction": rounded(symmetric(lens, "maxCenterOffsetFraction")),
+        }
+    return parameters
 
 
 def validate_normal_augmentation_parent(record: dict[str, Any]) -> None:
@@ -241,7 +321,24 @@ def apply_camera_augmentation(image: Image.Image, parameters: dict[str, Any]) ->
     shading = 1.0 - float(parameters["shadingStrength"]) * (directional + 1.0) / 2.0
     radius_squared = np.minimum(1.0, x * x + y * y)
     vignette = 1.0 - float(parameters["vignetteStrength"]) * radius_squared
-    values *= (shading * vignette)[..., None]
+    lens_shading = np.ones_like(vignette)
+    lens_keys = {
+        "offAxisLensShadingStrength",
+        "lensShadingCenterOffsetXFraction",
+        "lensShadingCenterOffsetYFraction",
+    }
+    present_lens_keys = lens_keys.intersection(parameters)
+    if present_lens_keys and present_lens_keys != lens_keys:
+        raise MvtecResearchError("off-axis lens shading parameters must be complete")
+    if present_lens_keys:
+        lens_strength = _require_finite_number(parameters, "offAxisLensShadingStrength")
+        lens_offset_x = _require_finite_number(parameters, "lensShadingCenterOffsetXFraction")
+        lens_offset_y = _require_finite_number(parameters, "lensShadingCenterOffsetYFraction")
+        if not 0.0 <= lens_strength <= 0.04 or abs(lens_offset_x) > 0.25 or abs(lens_offset_y) > 0.25:
+            raise MvtecResearchError("off-axis lens shading parameters are outside the approved generic-simulation range")
+        lens_radius_squared = np.minimum(1.0, (x - 2.0 * lens_offset_x) ** 2 + (y - 2.0 * lens_offset_y) ** 2)
+        lens_shading = 1.0 - lens_strength * lens_radius_squared
+    values *= (shading * vignette * lens_shading)[..., None]
     noise_rng = np.random.default_rng(int(parameters["noiseSeed"]))
     values += noise_rng.normal(0.0, float(parameters["sensorNoiseStdDn"]) / 255.0, values.shape).astype(np.float32)
     return Image.fromarray(np.rint(np.clip(values, 0.0, 1.0) * 255.0).astype(np.uint8))
@@ -334,9 +431,11 @@ def generate_normal_augmentations(
         "sourceManifestPath": str(manifest_path),
         "sourceManifestFileSha256": sha256_file(manifest_path),
         "sourceManifestDeclaredSha256": manifest.get("manifestSha256"),
-        "recipePath": str(recipe_path),
+        "recipePath": str(recipe_path.resolve()),
         "recipeSha256": recipe_sha256,
+        "recipe": recipe,
         "variantsPerParent": variants_per_parent,
+        "generation": _generator_provenance(),
         "records": output_records,
     }
     document["augmentationManifestSha256"] = _document_digest(document, "augmentationManifestSha256")
@@ -344,6 +443,23 @@ def generate_normal_augmentations(
         json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     return document
+
+
+def _validate_generation_provenance(document: dict[str, Any]) -> None:
+    generation = _require_mapping(document, "generation")
+    expected_hashes = {
+        "generatorModuleSha256": sha256_file(Path(__file__)),
+        "generatorEntrypointSha256": sha256_file(REPOSITORY_ROOT / "tools" / "generate_mvtec_ad_normal_augmentations.py"),
+    }
+    for name, expected in expected_hashes.items():
+        if _require_sha256(generation, name) != expected:
+            raise MvtecResearchError(f"augmentation {name} does not match this generator")
+    for name in ("python", "platform", "pillowVersion", "opencvVersion", "numpyVersion"):
+        _require_string(generation, name)
+    if generation.get("gitRevision") is not None:
+        _require_string(generation, "gitRevision")
+    if generation.get("gitWorktreeClean") is not None and not isinstance(generation.get("gitWorktreeClean"), bool):
+        raise MvtecResearchError("augmentation gitWorktreeClean must be a boolean or null")
 
 
 def load_validated_normal_augmentations(augmentation_manifest_path: Path, source_manifest_path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -366,11 +482,34 @@ def load_validated_normal_augmentations(augmentation_manifest_path: Path, source
         raise MvtecResearchError("augmentation source manifest declared digest does not match")
     if document.get("augmentationManifestSha256") != _document_digest(document, "augmentationManifestSha256"):
         raise MvtecResearchError("augmentation manifest digest does not match")
-    _require_sha256(document, "recipeSha256")
+    recipe_sha256 = _require_sha256(document, "recipeSha256")
+    recipe_path = _resolve_recipe_path(_require_string(document, "recipePath"))
+    if not recipe_path.is_file():
+        raise MvtecResearchError("augmentation recipe file is missing")
+    recipe, actual_recipe_sha256 = load_camera_recipe(recipe_path)
+    if actual_recipe_sha256 != recipe_sha256:
+        raise MvtecResearchError("augmentation recipe digest does not match")
+    if document.get("recipe") != recipe:
+        raise MvtecResearchError("augmentation embedded recipe does not match the recipe file")
+    _validate_generation_provenance(document)
+    variants_per_parent = document.get("variantsPerParent")
+    if not isinstance(variants_per_parent, int) or isinstance(variants_per_parent, bool) or not 1 <= variants_per_parent <= 8:
+        raise MvtecResearchError("augmentation variantsPerParent must be between 1 and 8")
     records = document.get("records")
     if not isinstance(records, list) or not records:
         raise MvtecResearchError("augmentation manifest has no records")
     parents = {str(record.get("caseId")): record for record in source_manifest["records"] if isinstance(record, dict)}
+    eligible_parents = sorted(
+        (record for record in parents.values() if isinstance(record, dict) and record.get("role") in NORMAL_AUGMENTATION_ROLES),
+        key=lambda record: str(record.get("caseId", "")),
+    )
+    for parent in eligible_parents:
+        validate_normal_augmentation_parent(parent)
+    expected_case_ids = {
+        f"{parent['caseId']}/camera-augmentation/{variant_id:02d}"
+        for parent in eligible_parents
+        for variant_id in range(1, variants_per_parent + 1)
+    }
     output_root = augmentation_manifest_path.parent
     seen_case_ids: set[str] = set()
     validated: list[dict[str, Any]] = []
@@ -400,10 +539,30 @@ def load_validated_normal_augmentations(augmentation_manifest_path: Path, source
         if sha256_file(output_path) != _require_sha256(record, "sourceSha256"):
             raise MvtecResearchError("augmentation output digest does not match")
         variant_id = record.get("variantId")
-        if not isinstance(variant_id, int) or isinstance(variant_id, bool) or variant_id <= 0:
-            raise MvtecResearchError("augmentation variantId must be positive")
+        if not isinstance(variant_id, int) or isinstance(variant_id, bool) or not 1 <= variant_id <= variants_per_parent:
+            raise MvtecResearchError("augmentation variantId is outside the declared coverage")
         parameters = record.get("parameters")
         if not isinstance(parameters, dict):
             raise MvtecResearchError("augmentation parameters must be an object")
+        expected_parameters = sample_camera_parameters(
+            recipe,
+            recipe_sha256=recipe_sha256,
+            parent_case_id=parent_case_id,
+            parent_source_sha256=str(parent["sourceSha256"]),
+            variant_id=variant_id,
+        )
+        if parameters != expected_parameters:
+            raise MvtecResearchError("augmentation parameters do not match the frozen recipe and parent")
+        expected_case_id = f"{parent_case_id}/camera-augmentation/{variant_id:02d}"
+        if case_id != expected_case_id:
+            raise MvtecResearchError("augmentation caseId does not match its parent and variant")
+        child_name = hashlib.sha256(
+            f"{parent_case_id}\0{parent['sourceSha256']}\0{variant_id}".encode("utf-8")
+        ).hexdigest()
+        expected_relative_path = Path("images") / f"{child_name}-v{variant_id}.jpg"
+        if relative_path != expected_relative_path:
+            raise MvtecResearchError("augmentation relativePath does not match its parent and variant")
         validated.append(dict(record))
+    if seen_case_ids != expected_case_ids:
+        raise MvtecResearchError("augmentation records do not cover every eligible normal parent and declared variant")
     return document, validated

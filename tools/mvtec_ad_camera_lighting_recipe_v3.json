@@ -1,0 +1,31 @@
+{
+  "authoritative": false,
+  "blindPolicy": "BLIND_ORIGINAL_ONLY",
+  "description": "Controlled V2-compatible narrow generic camera simulation with one additional bounded, non-brightening off-axis lens-shading term. The samplingSeedAnchor preserves every V2 random draw so this is an offline research A/B experiment, not a device calibration or production authorization.",
+  "encoding": {
+    "jpegQualityMax": 98,
+    "jpegQualityMin": 95
+  },
+  "geometry": {
+    "maxCornerJitterFraction": 0.002,
+    "maxRotationDegrees": 0.35,
+    "maxScaleDelta": 0.005,
+    "maxTranslationFraction": 0.002
+  },
+  "id": "GENERIC_PHONE_CAPTURE_NORMAL_V3_NARROW_OFF_AXIS_LENS_SHADING",
+  "offAxisLensShading": {
+    "maxCenterOffsetFraction": 0.12,
+    "maxStrength": 0.025
+  },
+  "photometry": {
+    "maxExposureEv": 0.1,
+    "maxGammaDelta": 0.025,
+    "maxSensorNoiseStdDn": 0.5,
+    "maxShadingStrength": 0.04,
+    "maxVignetteStrength": 0.025,
+    "maxWhiteBalanceDelta": 0.025
+  },
+  "productionAuthorized": false,
+  "samplingSeedAnchor": "sha256:1f0b49bb26066936a63122cc5c53588f5ad051156243464a31d20dbf03bf653f",
+  "schemaVersion": "phone-dino.mvtec-ad-camera-recipe/1.0"
+}

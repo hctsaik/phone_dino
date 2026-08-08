@@ -39,6 +39,19 @@ narrower envelope. It may be selected only from normal FIT/tuning robustness
 and threshold-inflation results; it must not be selected from blind AUROC,
 defect labels, or MVTec masks.
 
+[v3](../tools/mvtec_ad_camera_lighting_recipe_v3.json) is a controlled A/B
+extension of v2. It adds only a bounded, non-brightening off-axis lens-shading
+term. Its `samplingSeedAnchor` is v2's recipe digest, so every pre-existing
+v2 random draw remains byte-for-byte identical for the same parent and variant;
+only the three new lens-shading parameters are sampled afterwards. This keeps
+the normal-only comparison attributable to the lens-shading change rather than
+to a wholesale reseeding of geometry and photometry.
+
+V3 deliberately does not add blur, glare, radial distortion, hot pixels, or
+stronger noise. Those effects need real device/fixture evidence before they
+can be treated as normal-label-preserving simulation. The current JPEG output
+is 4:4:4; mobile 4:2:0 behavior remains a separate, future experiment.
+
 ## Generate a package
 
 The destination must be a new or empty directory outside this Git worktree.
@@ -55,9 +68,9 @@ reports in the repository.
 The package contains JPEG derivatives and `augmentation_manifest.json`. Each
 derivative binds its parent case/source digest, recipe digest, variant ID,
 derived seed, exact sampled parameters, output path, and output SHA-256. The
-seed is derived from the recipe digest, parent case ID, parent source digest,
-and variant ID, so adding records or changing enumeration order cannot alter
-an existing derivative.
+seed is derived from the recipe digest (or an explicitly recorded controlled
+seed anchor), parent case ID, parent source digest, and variant ID, so adding
+records or changing enumeration order cannot alter an existing derivative.
 
 The manifest declares all of the following:
 
@@ -65,6 +78,15 @@ The manifest declares all of the following:
 - `purpose: OFFLINE_MVTEC_RESEARCH_ONLY`;
 - `blindPolicy: BLIND_ORIGINAL_ONLY`; and
 - the raw frozen-manifest file digest plus its declared manifest identity.
+
+The current generator emits augmentation-manifest schema `1.1`. It embeds the
+parsed recipe and records generator module/entrypoint hashes, Git revision and
+worktree state, plus Python, Pillow, OpenCV, and NumPy versions. Before scoring,
+the loader verifies the actual recipe file digest, rederives every parameter
+set from its parent and variant, and requires exactly every eligible normal
+parent times the declared variant count. Older `1.0` packages lack these
+bindings and must be regenerated for a new iteration; they are not silently
+upgraded.
 
 Any score runner must verify these bindings before consuming the derived
 normal FIT/tuning images. It must verify every generated image SHA-256 and
