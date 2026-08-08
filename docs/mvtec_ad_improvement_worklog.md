@@ -136,6 +136,37 @@ comparison against the clean 1,024-prototype report is external at
 `patch_clean1024_vs_locked_v2_2048.json`; it is an observational delta report,
 not a candidate winner.
 
+## Physical readiness audit (2026-08-09)
+
+The offline research result was not used as a substitute for a physical-device
+qualification. A read-only check of the canonical PhoneCV topology found the
+engineering Web (`4173`), API (`4174`), real PhoneDINO analyzer (`8082`),
+recipe binding, and Tailscale HTTPS path reachable. The fixture-only port
+`8080` was not used.
+
+The overall engineering gate remains **not ready**: the canonical
+`test-engineering-services.ps1` exits non-zero because both local and remote
+Capture Health endpoints are `DEGRADED`. Their external probe is
+`NOT_CONFIGURED`; the approved `CAPTURE_HEALTH_PROBE_TOKEN` and a registered
+readiness-watchdog task are absent. This is intentionally not auto-remediated:
+it requires an approved machine secret and an authorized external state change.
+
+No admissible physical qualification cohort is present. Capture Health records
+zero independent captures and zero traceable reference masters; its stored
+results lack usable capture-source provenance and geometry-calibration
+eligibility. The current engineering readiness reports
+`ENGINEERING_REAL_DINO`, but also `simulation: true` and
+`productionAuthorized: false`, so it must not be presented as production or
+physical qualification. The external MVTec subset and its derivatives remain
+offline research only.
+
+Before a physical bake-off or qualification can begin, freeze the deployed
+source/profile/artifact digests with a real-capture manifest, then provide the
+controlled normal/anomaly/capture-reject cohorts, QR + ChArUco traceable
+reference-board evidence, native-still attestation, and the defined MSA and
+feature-ladder captures. An independently held blind partition must remain
+untouched until configuration is locked.
+
 ## Next boundary
 
 The offline software deliverables for this MVTec iteration are complete. Do
