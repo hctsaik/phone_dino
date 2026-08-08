@@ -51,7 +51,9 @@ Example patch run using one normal derivative per FIT/tuning input:
 For a tuning-only iteration, add `--normal-only`. It neither loads nor scores
 blind images and writes `blindReporting.state: NOT_RUN`; its per-category
 `normalScoreMedian`, `normalScoreP95`, and `normalScoreMax` make threshold
-inflation measurable without blind-label leakage.
+inflation measurable without blind-label leakage. Augmented runs also split
+the original versus derivative tuning distributions, so an apparent change
+cannot be hidden by mixing two different normal populations.
 
 Use a fresh `--output` path for every run. The command refuses output and
 feature-cache locations inside this Git worktree, and never overwrites an

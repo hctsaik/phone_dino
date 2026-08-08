@@ -107,4 +107,8 @@ def test_normal_calibration_summary_uses_only_scored_normal_records() -> None:
         "normalScoreMedian": 0.2,
         "normalScoreP95": 0.9,
         "normalScoreMax": 0.9,
+        "originalTuningNormalScoreCases": 3,
+        "originalTuningNormalScoreMedian": 0.2,
+        "originalTuningNormalScoreP95": 0.9,
+        "originalTuningNormalScoreMax": 0.9,
     }

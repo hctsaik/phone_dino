@@ -1,0 +1,26 @@
+{
+  "authoritative": false,
+  "blindPolicy": "BLIND_ORIGINAL_ONLY",
+  "description": "Narrowed generic normal camera and lighting simulation selected solely after v1 normal-tuning threshold inflation. Offline, non-commercial MVTec AD research only; not device-calibrated and not production-authorized.",
+  "encoding": {
+    "jpegQualityMax": 98,
+    "jpegQualityMin": 95
+  },
+  "geometry": {
+    "maxCornerJitterFraction": 0.002,
+    "maxRotationDegrees": 0.35,
+    "maxScaleDelta": 0.005,
+    "maxTranslationFraction": 0.002
+  },
+  "id": "GENERIC_PHONE_CAPTURE_NORMAL_V2_NARROW",
+  "photometry": {
+    "maxExposureEv": 0.1,
+    "maxGammaDelta": 0.025,
+    "maxSensorNoiseStdDn": 0.5,
+    "maxShadingStrength": 0.04,
+    "maxVignetteStrength": 0.025,
+    "maxWhiteBalanceDelta": 0.025
+  },
+  "productionAuthorized": false,
+  "schemaVersion": "phone-dino.mvtec-ad-camera-recipe/1.0"
+}

@@ -21,8 +21,8 @@ recipe before making a blind observation report.
 
 ## Generic camera envelope
 
-The committed [recipe](../tools/mvtec_ad_camera_lighting_recipe_v1.json) is a
-bounded generic simulation, not a calibration to any phone or fixture:
+The committed [v1 recipe](../tools/mvtec_ad_camera_lighting_recipe_v1.json) is
+a bounded generic simulation, not a calibration to any phone or fixture:
 
 - residual rotation at most ±1°, scale ±1.5%, translation ±0.5% of an edge,
   and corner displacement ±0.5% of the shorter edge;
@@ -33,6 +33,11 @@ bounded generic simulation, not a calibration to any phone or fixture:
 It deliberately excludes crop, flip, cutout, synthetic defects, strong glare,
 and blur. Those changes can destroy a normal label or model conditions that a
 real PhoneDINO capture path must instead reject or independently qualify.
+
+[v2](../tools/mvtec_ad_camera_lighting_recipe_v2.json) is a deliberately
+narrower envelope. It may be selected only from normal FIT/tuning robustness
+and threshold-inflation results; it must not be selected from blind AUROC,
+defect labels, or MVTec masks.
 
 ## Generate a package
 

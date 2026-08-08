@@ -21,6 +21,7 @@ from phone_dino.mvtec_research import (
 
 REPOSITORY_ROOT = Path(__file__).parents[1]
 RECIPE_PATH = REPOSITORY_ROOT / "tools" / "mvtec_ad_camera_lighting_recipe_v1.json"
+RECIPE_V2_PATH = REPOSITORY_ROOT / "tools" / "mvtec_ad_camera_lighting_recipe_v2.json"
 
 
 def _sha256(path: Path) -> str:
@@ -62,8 +63,9 @@ def _frozen_manifest(tmp_path: Path) -> Path:
     return manifest_path
 
 
-def test_parameters_and_seed_are_stable_without_record_order() -> None:
-    recipe, recipe_sha256 = load_camera_recipe(RECIPE_PATH)
+@pytest.mark.parametrize("recipe_path", [RECIPE_PATH, RECIPE_V2_PATH])
+def test_parameters_and_seed_are_stable_without_record_order(recipe_path: Path) -> None:
+    recipe, recipe_sha256 = load_camera_recipe(recipe_path)
     first = sample_camera_parameters(
         recipe,
         recipe_sha256=recipe_sha256,

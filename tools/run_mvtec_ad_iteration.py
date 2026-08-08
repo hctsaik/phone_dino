@@ -441,13 +441,30 @@ def normal_calibration_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
     scores = sorted(float(record["score"]) for record in records)
     if not scores:
         raise IterationError("normal calibration summary requires scored tuning records")
-    p95_index = max(0, math.ceil(len(scores) * 0.95) - 1)
-    return {
+    def summary(prefix: str, selected: list[float]) -> dict[str, Any]:
+        if not selected:
+            return {}
+        selected = sorted(selected)
+        p95_index = max(0, math.ceil(len(selected) * 0.95) - 1)
+        return {
+            f"{prefix}Cases": len(selected),
+            f"{prefix}Median": selected[len(selected) // 2],
+            f"{prefix}P95": selected[p95_index],
+            f"{prefix}Max": selected[-1],
+        }
+    result = {
         "normalCalibrationCases": len(scores),
         "normalScoreMedian": scores[len(scores) // 2],
-        "normalScoreP95": scores[p95_index],
+        "normalScoreP95": scores[max(0, math.ceil(len(scores) * 0.95) - 1)],
         "normalScoreMax": scores[-1],
     }
+    result |= summary("originalTuningNormalScore", [
+        float(record["score"]) for record in records if not record.get("isAugmentation", False)
+    ])
+    result |= summary("augmentedTuningNormalScore", [
+        float(record["score"]) for record in records if record.get("isAugmentation", False)
+    ])
+    return result
 
 
 def _mask_for_dino_input(path: Path) -> object:
@@ -586,8 +603,12 @@ def _score_record(record: dict[str, Any], components: dict[str, Any] | None = No
         "kind": record["kind"],
         "defect": record.get("defect"),
         "sourceSha256": record["sourceSha256"],
+        "isAugmentation": bool(record.get("isAugmentation", False)),
         "score": float(record["score"]),
     }
+    if record.get("isAugmentation", False):
+        score_record["parentCaseId"] = record.get("parentCaseId")
+        score_record["parentSourceSha256"] = record.get("parentSourceSha256")
     if components is not None:
         score_record |= {
             "maxPatchDistance": float(components["maxPatchDistance"]),

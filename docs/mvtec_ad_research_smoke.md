@@ -51,3 +51,7 @@ blind labels remain reporting-only.
 The tool uses the locally pinned DINOv2 repository and checkpoint under
 `runtime/models`; it neither downloads model weights nor calls the PhoneDINO
 service. Its JSON report has `authoritative: false` by design.
+
+For deterministic normal-only camera/lighting simulation, bounded batch/cache
+iteration, strict report comparison, and post-hoc research localization
+metrics, follow [the MVTec AD iteration protocol](mvtec_ad_iteration_protocol.md).
