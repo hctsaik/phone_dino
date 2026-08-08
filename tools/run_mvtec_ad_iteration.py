@@ -115,6 +115,8 @@ def load_frozen_records(manifest_path: Path) -> tuple[dict[str, Any], list[dict[
         kind = _require_string(record, "kind")
         if role not in {"FIT", "THRESHOLD_TUNING", "BLIND"} or kind not in {"NOMINAL", "ANOMALY"}:
             raise IterationError("frozen MVTec role or kind is unsupported")
+        if role in {"FIT", "THRESHOLD_TUNING"} and kind != "NOMINAL":
+            raise IterationError("FIT and THRESHOLD_TUNING records must be nominal")
         record["category"] = _require_string(record, "category")
         record["sourceSha256"] = _require_sha256(record, "sourceSha256")
         relative_path = _safe_relative_path(record.get("relativePath"), name="relativePath")
@@ -673,7 +675,7 @@ def run(
     all_records_by_case: dict[str, dict[str, Any]] = {}
     for category_records in categories.values():
         for record in category_records:
-            if normal_only and record["role"] == "BLIND":
+            if normal_only and (record["role"] not in {"FIT", "THRESHOLD_TUNING"} or record["kind"] != "NOMINAL"):
                 continue
             case_id = str(record["caseId"])
             if case_id in all_records_by_case:
