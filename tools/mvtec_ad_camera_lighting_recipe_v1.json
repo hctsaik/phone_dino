@@ -1,0 +1,26 @@
+{
+  "authoritative": false,
+  "blindPolicy": "BLIND_ORIGINAL_ONLY",
+  "description": "Bounded generic normal camera and lighting simulation for offline, non-commercial MVTec AD research. It is not calibrated to a PhoneDINO device and cannot establish production performance.",
+  "encoding": {
+    "jpegQualityMax": 98,
+    "jpegQualityMin": 90
+  },
+  "geometry": {
+    "maxCornerJitterFraction": 0.005,
+    "maxRotationDegrees": 1.0,
+    "maxScaleDelta": 0.015,
+    "maxTranslationFraction": 0.005
+  },
+  "id": "GENERIC_PHONE_CAPTURE_NORMAL_V1",
+  "photometry": {
+    "maxExposureEv": 0.35,
+    "maxGammaDelta": 0.08,
+    "maxSensorNoiseStdDn": 1.5,
+    "maxShadingStrength": 0.15,
+    "maxVignetteStrength": 0.1,
+    "maxWhiteBalanceDelta": 0.08
+  },
+  "productionAuthorized": false,
+  "schemaVersion": "phone-dino.mvtec-ad-camera-recipe/1.0"
+}
