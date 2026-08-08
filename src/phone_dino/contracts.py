@@ -204,8 +204,24 @@ class OffsetPlaneCalibration(StrictModel):
         return self
 
 
+class ReferenceBoardBinding(StrictModel):
+    """PhoneCV-owned identity pins for a hybrid QR + ChArUco reference board.
+
+    The QR payload is intentionally represented by a digest: PhoneDINO proves
+    that the decoded still contains the pinned payload, while PhoneCV remains
+    the owner of signatures, lifecycle and revocation.
+    """
+
+    schema_version: Literal["1.0"] = Field(alias="schemaVersion")
+    tag_uid_sha256: Sha256 = Field(alias="tagUidSha256")
+    board_serial_sha256: Sha256 = Field(alias="boardSerialSha256")
+    template_manifest_sha256: PrefixedSha256 = Field(alias="templateManifestSha256")
+    installation_digest: PrefixedSha256 = Field(alias="installationDigest")
+    qr_payload_sha256: Sha256 = Field(alias="qrPayloadSha256")
+
+
 class AnalyzeRequest(StrictModel):
-    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"] = Field(alias="schemaVersion")
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6"] = Field(alias="schemaVersion")
     request_id: Identifier = Field(alias="requestId")
     session_id: Identifier = Field(alias="sessionId")
     capture_ordinal: Annotated[int, Field(ge=1, le=1000)] = Field(alias="captureOrdinal")
@@ -230,6 +246,7 @@ class AnalyzeRequest(StrictModel):
     offset_plane_calibration: OffsetPlaneCalibration | None = Field(
         default=None, alias="offsetPlaneCalibration",
     )
+    reference_board: ReferenceBoardBinding | None = Field(default=None, alias="referenceBoard")
     simulation: bool
 
     @field_validator("deadline")
@@ -243,6 +260,8 @@ class AnalyzeRequest(StrictModel):
     def golden_ratio_reference_is_retired(self) -> "AnalyzeRequest":
         if self.golden_ratio_scale_reference is not None:
             raise ValueError("goldenRatioScaleReference is retired; Current metric evidence requires ChArUco")
+        if (self.schema_version == "1.6") != (self.reference_board is not None):
+            raise ValueError("wire 1.6 requires referenceBoard and earlier wires must not carry it")
         return self
 
 
@@ -909,13 +928,47 @@ class ResolvedVersions(StrictModel):
     scorer_input_contract_digest: PrefixedSha256 | None = Field(default=None, alias="scorerInputContractDigest")
 
 
+class ReferenceBoardEvidence(StrictModel):
+    """Authoritative-still evidence for an immutable hybrid reference board."""
+
+    state: Literal["VERIFIED", "REJECTED"]
+    metric_scale_source: Literal["CHARUCO_ONLY"] = Field(alias="metricScaleSource")
+    qr_payload_sha256: Sha256 = Field(alias="qrPayloadSha256")
+    qr_side_px: Annotated[float | None, Field(default=None, alias="qrSidePx", gt=0, le=100_000)] = None
+    charuco_corner_count: Annotated[int | None, Field(default=None, alias="charucoCornerCount", ge=0, le=10_000)] = None
+    charuco_inlier_count: Annotated[int | None, Field(default=None, alias="charucoInlierCount", ge=0, le=10_000)] = None
+    qr_to_charuco_residual_mm: Annotated[
+        float | None, Field(default=None, alias="qrToCharucoResidualMm", ge=0, le=10_000),
+    ] = None
+    reason_codes: Annotated[list[str], Field(alias="reasonCodes", max_length=16)]
+
+    @model_validator(mode="after")
+    def validate_state(self) -> "ReferenceBoardEvidence":
+        if self.state == "VERIFIED":
+            if self.reason_codes or any(value is None for value in (
+                self.qr_side_px, self.charuco_corner_count, self.charuco_inlier_count,
+                self.qr_to_charuco_residual_mm,
+            )):
+                raise ValueError("verified reference board evidence requires complete metrics and no reason codes")
+        elif not self.reason_codes:
+            raise ValueError("rejected reference board evidence requires a reason code")
+        return self
+
+
 class AnalyzeObservation(StrictModel):
-    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"] = Field(alias="schemaVersion")
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6"] = Field(alias="schemaVersion")
     request_id: Identifier = Field(alias="requestId")
     analysis_id: Sha256 = Field(alias="analysisId")
     raw_sha256: Sha256 = Field(alias="rawSha256")
     simulation: bool
     resolved_versions: ResolvedVersions = Field(alias="resolvedVersions")
     capture_assessment: CaptureAssessment = Field(alias="captureAssessment")
+    reference_board_evidence: ReferenceBoardEvidence | None = Field(default=None, alias="referenceBoardEvidence")
     normalization: NormalizationObservation | None = None
     analysis: AnalysisObservation
+
+    @model_validator(mode="after")
+    def validate_reference_board_evidence(self) -> "AnalyzeObservation":
+        if (self.schema_version == "1.6") != (self.reference_board_evidence is not None):
+            raise ValueError("wire 1.6 requires referenceBoardEvidence and earlier wires must not carry it")
+        return self

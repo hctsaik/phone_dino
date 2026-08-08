@@ -19,7 +19,7 @@ from .artifacts import (
     CurrentSubjectSegmentationPolicy, DimensionMeasurementPolicy,
     InspectionRoiContract, ProductionArtifact, ProductionArtifactV12, ProductionArtifactV13,
     ProductionArtifactV14, ProductionArtifactV15, ProductionArtifactV16, ProductionArtifactV17,
-    ProductionArtifactV18,
+    ProductionArtifactV18, ProductionArtifactV19, ReferenceBoardPolicy,
     RecipeAnalysisProfile, ScorerInputContract,
     ScorerInputTileEmbedding, SpatialDifferencePolicy, StillGate, SubjectAlignmentContract,
     SubjectSegmentationContract, TargetAlignmentPolicy, inspection_roi_image,
@@ -69,7 +69,7 @@ class SubjectSegmentationBuildSpec(StrictCompilerModel):
 
 
 class ArtifactBuildSpec(StrictCompilerModel):
-    schema_version: str = Field(alias="schemaVersion", pattern=r"^1\.[12345678]$")
+    schema_version: str = Field(alias="schemaVersion", pattern=r"^1\.[123456789]$")
     recipe_id: Identifier = Field(alias="recipeId")
     machine_id: Identifier = Field(alias="machineId")
     board_id: Identifier = Field(alias="boardId")
@@ -99,41 +99,44 @@ class ArtifactBuildSpec(StrictCompilerModel):
     dimension_measurement_policy: DimensionMeasurementPolicy | None = Field(
         default=None, alias="dimensionMeasurementPolicy",
     )
+    reference_board: ReferenceBoardPolicy | None = Field(default=None, alias="referenceBoard")
 
     def model_post_init(self, __context: object) -> None:
         if len({source.id for source in self.golden_sources}) != len(self.golden_sources):
             raise ValueError("Golden source ids must be unique")
-        if self.schema_version in {"1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8"} and self.inspection_roi is None:
+        if self.schema_version in {"1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9"} and self.inspection_roi is None:
             raise ValueError("schema 1.2+ requires inspectionRoi")
         if self.schema_version == "1.1" and self.inspection_roi is not None:
             raise ValueError("schema 1.1 cannot include inspectionRoi")
-        if self.schema_version in {"1.3", "1.4", "1.5", "1.6", "1.7", "1.8"} and self.subject_segmentation is None:
+        if self.schema_version in {"1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9"} and self.subject_segmentation is None:
             raise ValueError("schema 1.3+ requires subjectSegmentation")
-        if self.schema_version not in {"1.3", "1.4", "1.5", "1.6", "1.7", "1.8"} and self.subject_segmentation is not None:
+        if self.schema_version not in {"1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9"} and self.subject_segmentation is not None:
             raise ValueError("subjectSegmentation requires schema 1.3+")
-        if self.schema_version in {"1.4", "1.5", "1.6", "1.7", "1.8"}:
+        if self.schema_version in {"1.4", "1.5", "1.6", "1.7", "1.8", "1.9"}:
             if self.subject_alignment is None or self.candidate_verification_policy is None:
                 raise ValueError("schema 1.4 requires subjectAlignment and candidateVerificationPolicy")
         elif self.subject_alignment is not None or self.candidate_verification_policy is not None:
             raise ValueError("subject alignment and candidate verification require schema 1.4")
-        if self.schema_version in {"1.5", "1.6", "1.7", "1.8"}:
+        if self.schema_version in {"1.5", "1.6", "1.7", "1.8", "1.9"}:
             if self.scorer_input_contract is None or self.recipe_analysis_profile is None:
                 raise ValueError("schema 1.5 requires scorerInputContract and recipeAnalysisProfile")
         elif self.scorer_input_contract is not None or self.recipe_analysis_profile is not None:
             raise ValueError("ROI-only scorer and recipe analysis profile require schema 1.5")
-        if self.schema_version in {"1.6", "1.7", "1.8"}:
+        if self.schema_version in {"1.6", "1.7", "1.8", "1.9"}:
             if self.current_subject_segmentation is None:
                 raise ValueError("schema 1.6 requires currentSubjectSegmentation")
         elif self.current_subject_segmentation is not None:
             raise ValueError("currentSubjectSegmentation requires schema 1.6")
-        if self.schema_version in {"1.7", "1.8"} and not isinstance(
+        if self.schema_version in {"1.7", "1.8", "1.9"} and not isinstance(
             self.candidate_verification_policy, CandidateVerificationPolicyV2,
         ):
             raise ValueError("schema 1.7 requires local-structure candidate verification")
-        if self.schema_version == "1.8" and self.dimension_measurement_policy is None:
-            raise ValueError("schema 1.8 requires dimensionMeasurementPolicy")
-        if self.schema_version != "1.8" and self.dimension_measurement_policy is not None:
-            raise ValueError("dimensionMeasurementPolicy requires schema 1.8")
+        if self.schema_version in {"1.8", "1.9"} and self.dimension_measurement_policy is None:
+            raise ValueError("schema 1.8+ requires dimensionMeasurementPolicy")
+        if self.schema_version not in {"1.8", "1.9"} and self.dimension_measurement_policy is not None:
+            raise ValueError("dimensionMeasurementPolicy requires schema 1.8+")
+        if (self.schema_version == "1.9") != (self.reference_board is not None):
+            raise ValueError("schema 1.9 requires referenceBoard and earlier schemas must not carry it")
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,8 +227,8 @@ def compile_artifact(
     # Schema 1.3 needs generated masks, but normalization only needs the
     # already-pinned 1.2 geometry. Build a temporary 1.2 view, then validate
     # the complete 1.3 artifact after every Golden has been segmented.
-    artifact_type = ProductionArtifactV12 if spec.schema_version in {"1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8"} else ProductionArtifact
-    normalization_schema = "1.2" if spec.schema_version in {"1.3", "1.4", "1.5", "1.6", "1.7", "1.8"} else spec.schema_version
+    artifact_type = ProductionArtifactV12 if spec.schema_version in {"1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9"} else ProductionArtifact
+    normalization_schema = "1.2" if spec.schema_version in {"1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9"} else spec.schema_version
     artifact_fields: dict[str, object] = {}
     if spec.inspection_roi is not None:
         artifact_fields["inspectionRoi"] = spec.inspection_roi
@@ -339,13 +342,13 @@ def compile_artifact(
         patches: PatchEmbedding | None = None
         scorer_tiles = None
         scorer_input_sha = None
-        if spec.schema_version in {"1.5", "1.6", "1.7", "1.8"}:
+        if spec.schema_version in {"1.5", "1.6", "1.7", "1.8", "1.9"}:
             if not supports_patches or spec.inspection_roi is None or spec.scorer_input_contract is None:
                 raise CompilerError("ROI_ONLY_PATCH_EMBEDDER_REQUIRED")
             import numpy as np
 
             analysis_mask = np.asarray(inspection_roi_image(spec.inspection_roi), dtype=np.uint8)
-            if spec.schema_version in {"1.6", "1.7", "1.8"}:
+            if spec.schema_version in {"1.6", "1.7", "1.8", "1.9"}:
                 if subject_core_mask is None or spec.current_subject_segmentation is None:
                     raise CompilerError("PAIRED_INTERIOR_MASK_REQUIRED")
                 import cv2
@@ -455,8 +458,11 @@ def compile_artifact(
         artifact_document["dimensionMeasurementPolicy"] = spec.dimension_measurement_policy.model_dump(
             by_alias=True, mode="json",
         )
+    if spec.reference_board is not None:
+        artifact_document["referenceBoard"] = spec.reference_board.model_dump(by_alias=True, mode="json")
     artifact_model = (
-        ProductionArtifactV18 if spec.schema_version == "1.8"
+        ProductionArtifactV19 if spec.schema_version == "1.9"
+        else ProductionArtifactV18 if spec.schema_version == "1.8"
         else ProductionArtifactV17 if spec.schema_version == "1.7"
         else ProductionArtifactV16 if spec.schema_version == "1.6"
         else ProductionArtifactV15 if spec.schema_version == "1.5"

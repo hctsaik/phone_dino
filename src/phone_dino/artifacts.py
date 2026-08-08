@@ -4,9 +4,10 @@ import hashlib
 import hmac
 import json
 import base64
+import math
 from io import BytesIO
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from PIL import Image, ImageChops, ImageDraw, UnidentifiedImageError
 
@@ -559,6 +560,44 @@ class DimensionMeasurementPolicy(StrictArtifactModel):
     min_contour_points: int = Field(alias="minContourPoints", ge=4, le=1_000_000)
 
 
+class ReferenceBoardRectMm(StrictArtifactModel):
+    x: float = Field(ge=0, le=10_000)
+    y: float = Field(ge=0, le=10_000)
+    width: float = Field(gt=0, le=10_000)
+    height: float = Field(gt=0, le=10_000)
+
+
+class ReferenceBoardPolicy(StrictArtifactModel):
+    """Immutable hybrid-board identity and QR-to-ChArUco geometry policy.
+
+    QR identity is deliberately hash-bound, while every dimensional field is
+    tied to the ChArUco plane.  No QR-derived scale can enter this contract.
+    """
+
+    schema_version: Literal["1.0"] = Field(alias="schemaVersion")
+    metric_scale_source: Literal["CHARUCO_ONLY"] = Field(alias="metricScaleSource")
+    tag_uid_sha256: str = Field(alias="tagUidSha256", pattern=r"^[a-f0-9]{64}$")
+    board_serial_sha256: str = Field(alias="boardSerialSha256", pattern=r"^[a-f0-9]{64}$")
+    template_manifest_sha256: PrefixedSha256 = Field(alias="templateManifestSha256")
+    installation_digest: PrefixedSha256 = Field(alias="installationDigest")
+    qr_payload_sha256: str = Field(alias="qrPayloadSha256", pattern=r"^[a-f0-9]{64}$")
+    qr_symbol_bounds_mm: ReferenceBoardRectMm = Field(alias="qrSymbolBoundsMm")
+    charuco_origin_mm: Annotated[list[float], Field(alias="charucoOriginMm", min_length=2, max_length=3)]
+    min_qr_side_px: float = Field(alias="minQrSidePx", gt=8, le=100_000)
+    min_charuco_corners: int = Field(alias="minCharucoCorners", ge=4, le=10_000)
+    max_qr_to_charuco_residual_mm: float = Field(alias="maxQrToCharucoResidualMm", gt=0, le=1000)
+    digest: PrefixedSha256
+
+    def model_post_init(self, __context: object) -> None:
+        if any(not math.isfinite(value) for value in self.charuco_origin_mm):
+            raise ValueError("ChArUco origin must be finite")
+        payload = self.model_dump(by_alias=True, mode="json", exclude={"digest"})
+        encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        expected = "sha256:" + hashlib.sha256(encoded).hexdigest()
+        if not hmac.compare_digest(expected, self.digest):
+            raise ValueError("reference board digest does not match immutable policy")
+
+
 class ProductionArtifact(StrictArtifactModel):
     schema_version: Literal["1.1"] = Field(alias="schemaVersion")
     recipe_id: Identifier = Field(alias="recipeId")
@@ -730,6 +769,19 @@ class ProductionArtifactV18(ProductionArtifactV17):
     dimension_measurement_policy: DimensionMeasurementPolicy = Field(alias="dimensionMeasurementPolicy")
 
 
+class ProductionArtifactV19(ProductionArtifactV18):
+    """Schema 1.9: mandatory same-still QR + ChArUco reference-board gate."""
+
+    schema_version: Literal["1.9"] = Field(alias="schemaVersion")
+    reference_board: ReferenceBoardPolicy = Field(alias="referenceBoard")
+
+    def model_post_init(self, __context: object) -> None:
+        super().model_post_init(__context)
+        policy = self.reference_board
+        if policy.min_charuco_corners < self.still_gate.min_charuco_corners:
+            raise ValueError("reference board ChArUco support cannot be weaker than still gate")
+
+
 def require_subject_segmentation(artifact: "ProductionArtifactV13") -> SubjectSegmentationContract:
     contract = artifact.subject_segmentation
     roi = require_inspection_roi(artifact)
@@ -745,7 +797,7 @@ def require_subject_segmentation(artifact: "ProductionArtifactV13") -> SubjectSe
     return contract
 
 
-def load_artifact(path: Path, expected_digest: str, weights: Path) -> ProductionArtifact | ProductionArtifactV12 | ProductionArtifactV13 | ProductionArtifactV14 | ProductionArtifactV15 | ProductionArtifactV16 | ProductionArtifactV17 | ProductionArtifactV18:
+def load_artifact(path: Path, expected_digest: str, weights: Path) -> ProductionArtifact | ProductionArtifactV12 | ProductionArtifactV13 | ProductionArtifactV14 | ProductionArtifactV15 | ProductionArtifactV16 | ProductionArtifactV17 | ProductionArtifactV18 | ProductionArtifactV19:
     try:
         actual = digest_file(path)
         if not hmac.compare_digest(actual, expected_digest):
@@ -754,7 +806,8 @@ def load_artifact(path: Path, expected_digest: str, weights: Path) -> Production
         document = json.loads(raw)
         schema_version = document.get("schemaVersion")
         model = (
-            ProductionArtifactV18 if schema_version == "1.8"
+            ProductionArtifactV19 if schema_version == "1.9"
+            else ProductionArtifactV18 if schema_version == "1.8"
             else ProductionArtifactV17 if schema_version == "1.7"
             else ProductionArtifactV16 if schema_version == "1.6"
             else ProductionArtifactV15 if schema_version == "1.5"
@@ -778,7 +831,9 @@ def load_artifact(path: Path, expected_digest: str, weights: Path) -> Production
 
 def _paired_wire_schema_matches(artifact: ProductionArtifact, wire_schema_version: str) -> bool:
     return (
-        wire_schema_version in {"1.4", "1.5"}
+        wire_schema_version == "1.6"
+        if isinstance(artifact, ProductionArtifactV19)
+        else wire_schema_version in {"1.4", "1.5"}
         if isinstance(artifact, ProductionArtifactV18)
         else wire_schema_version == "1.3"
         if isinstance(artifact, ProductionArtifactV17)
@@ -809,3 +864,16 @@ def verify_artifact_binding(artifact: ProductionArtifact, request: AnalyzeReques
             raise ArtifactError("RECIPE_ANALYSIS_PROFILE_DIGEST_REQUIRED")
         if not hmac.compare_digest(request.recipe_analysis_profile_digest, artifact.recipe_analysis_profile.digest):
             raise ArtifactError("RECIPE_ANALYSIS_PROFILE_DIGEST_MISMATCH")
+    if isinstance(artifact, ProductionArtifactV19):
+        if request.reference_board is None:
+            raise ArtifactError("REFERENCE_BOARD_BINDING_REQUIRED")
+        policy = artifact.reference_board
+        expected_reference = {
+            "tag": (policy.tag_uid_sha256, request.reference_board.tag_uid_sha256),
+            "boardSerial": (policy.board_serial_sha256, request.reference_board.board_serial_sha256),
+            "manifest": (policy.template_manifest_sha256, request.reference_board.template_manifest_sha256),
+            "installation": (policy.installation_digest, request.reference_board.installation_digest),
+            "qrPayload": (policy.qr_payload_sha256, request.reference_board.qr_payload_sha256),
+        }
+        if any(not hmac.compare_digest(left, right) for left, right in expected_reference.values()):
+            raise ArtifactError("REFERENCE_BOARD_ARTIFACT_BINDING_MISMATCH")

@@ -16,7 +16,7 @@ from .analyzer import RUNTIME_DIGEST
 from .artifacts import (
     ArtifactError, CandidateVerificationPolicy, CandidateVerificationPolicyV2, GoldenEmbedding, ProductionArtifact,
     ProductionArtifactV12, ProductionArtifactV13, ProductionArtifactV14, ProductionArtifactV15,
-    ProductionArtifactV16, ProductionArtifactV17, ProductionArtifactV18, SpatialDifferencePolicy,
+    ProductionArtifactV16, ProductionArtifactV17, ProductionArtifactV18, ProductionArtifactV19, SpatialDifferencePolicy,
     inspection_roi_image, load_artifact, require_inspection_roi, require_subject_segmentation,
     verify_artifact_binding,
 )
@@ -33,6 +33,7 @@ from .contracts import (
     ScorerInputTileDigest, SpatialDifferenceEvidence, SubjectSegmentationEvidence,
 )
 from .decoder import DecodedImage
+from .reference_board import ReferenceBoardVerifier
 from .engines import LocalDinoV2Adapter
 from .offset_plane import (
     BoardPose, CameraIntrinsics, OffsetPlaneGeometryError, estimate_board_pose,
@@ -3598,6 +3599,7 @@ class ProductionAnalyzer:
         embedder: Embedder | None = None,
         subject_segmenter: SubjectSegmenter | None = None,
         relative_depth_estimator: RelativeDepthEstimator | None = None,
+        reference_board_verifier: ReferenceBoardVerifier | None = None,
     ):
         self.settings = settings
         self.adapter = LocalDinoV2Adapter(settings.model_repo, settings.model_weights)
@@ -3607,6 +3609,7 @@ class ProductionAnalyzer:
         )
         self.embedder = embedder or DinoV2Embedder(self.adapter, device=settings.device)
         self.subject_segmenter = subject_segmenter
+        self.reference_board_verifier = reference_board_verifier or ReferenceBoardVerifier()
         # A missing learned-depth model is non-fatal: the configured rig datum
         # or conservative offset prior still produces a bounded estimate.
         self.relative_depth_estimator = relative_depth_estimator
@@ -3639,7 +3642,7 @@ class ProductionAnalyzer:
         self._artifact: (
             ProductionArtifact | ProductionArtifactV12 | ProductionArtifactV13
             | ProductionArtifactV14 | ProductionArtifactV15 | ProductionArtifactV16
-            | ProductionArtifactV17 | ProductionArtifactV18 | None
+            | ProductionArtifactV17 | ProductionArtifactV18 | ProductionArtifactV19 | None
         ) = None
         # Golden ROI tiles are immutable and hash-bound to the artifact. Keep
         # their real DINO patch features for the process lifetime so subsequent
@@ -3888,6 +3891,21 @@ class ProductionAnalyzer:
                 "status": self._relative_depth_status,
                 "provider": "DEPTH_ANYTHING_V2" if self.relative_depth_estimator is not None else None,
             }
+        if isinstance(self._artifact, ProductionArtifactV19):
+            metadata["supportedSchemas"] = ["1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6"]
+            metadata["capabilities"] = [
+                *metadata["capabilities"],
+                "HYBRID_REFERENCE_BOARD_V1", "QR_CHARUCO_COLOCATION_GATE_V1",
+                "QR_IDENTITY_CHARUCO_SCALE_ONLY_V1",
+            ]
+            metadata["referenceBoard"] = {
+                "metricScaleSource": self._artifact.reference_board.metric_scale_source,
+                "templateManifestSha256": self._artifact.reference_board.template_manifest_sha256,
+                "installationDigest": self._artifact.reference_board.installation_digest,
+                "minQrSidePx": self._artifact.reference_board.min_qr_side_px,
+                "minCharucoCorners": self._artifact.reference_board.min_charuco_corners,
+                "maxQrToCharucoResidualMm": self._artifact.reference_board.max_qr_to_charuco_residual_mm,
+            }
         return metadata
 
     def measure_golden_dimensions(
@@ -4005,11 +4023,12 @@ class ProductionAnalyzer:
         if not ready or self._artifact is None:
             raise RuntimeError(reason or "ANALYZER_NOT_READY")
         verify_artifact_binding(self._artifact, request)
-        normalized = (
-            self.normalizer.normalize(image, self._artifact, request.board_candidates)
-            if request.board_candidates and isinstance(self.normalizer, OpenCvCharucoNormalizer)
-            else self.normalizer.normalize(image, self._artifact)
-        )
+        reference_board_evidence = None
+        if isinstance(self._artifact, ProductionArtifactV19):
+            # This must happen before either normalisation or embedding. In
+            # particular it prevents the target-only fallback from becoming a
+            # bypass around an artifact that requires a reference board.
+            reference_board_evidence = self.reference_board_verifier.verify(image, self._artifact)
         identity = "|".join((request.session_id, str(request.capture_ordinal), request.raw_sha256, request.execution_bundle_digest, RUNTIME_DIGEST))
         analysis_id = hashlib.sha256(identity.encode()).hexdigest()
         resolved = ResolvedVersions(
@@ -4027,6 +4046,23 @@ class ProductionAnalyzer:
                 if isinstance(self._artifact, ProductionArtifactV15) else None
             ),
         )
+        if reference_board_evidence is not None and reference_board_evidence.state != "VERIFIED":
+            return AnalyzeObservation(
+                schemaVersion=request.schema_version, requestId=request.request_id, analysisId=analysis_id,
+                rawSha256=request.raw_sha256, simulation=request.simulation, resolvedVersions=resolved,
+                captureAssessment=CaptureAssessment(
+                    state=CaptureState.RECAPTURE_REQUIRED,
+                    reasonCodes=list(reference_board_evidence.reason_codes),
+                ),
+                referenceBoardEvidence=reference_board_evidence,
+                normalization=None,
+                analysis=AnalysisObservation(state=AnalysisState.NOT_RUN),
+            )
+        normalized = (
+            self.normalizer.normalize(image, self._artifact, request.board_candidates)
+            if request.board_candidates and isinstance(self.normalizer, OpenCvCharucoNormalizer)
+            else self.normalizer.normalize(image, self._artifact)
+        )
         if normalized.reason_codes:
             normalization = None
             if normalized.alignment is not None:
@@ -4035,6 +4071,7 @@ class ProductionAnalyzer:
                 schemaVersion=request.schema_version, requestId=request.request_id, analysisId=analysis_id,
                 rawSha256=request.raw_sha256, simulation=request.simulation, resolvedVersions=resolved,
                 captureAssessment=CaptureAssessment(state=CaptureState.RECAPTURE_REQUIRED, reasonCodes=list(normalized.reason_codes)),
+                referenceBoardEvidence=reference_board_evidence,
                 normalization=normalization,
                 analysis=AnalysisObservation(state=AnalysisState.NOT_RUN),
             )
@@ -4049,6 +4086,7 @@ class ProductionAnalyzer:
                 captureAssessment=CaptureAssessment(
                     state=CaptureState.RECAPTURE_REQUIRED, reasonCodes=["TARGET_ALIGNMENT_REQUIRED"],
                 ),
+                referenceBoardEvidence=reference_board_evidence,
                 normalization=None if alignment is None else NormalizationObservation(alignment=alignment),
                 analysis=AnalysisObservation(state=AnalysisState.NOT_RUN),
             )
@@ -4096,6 +4134,7 @@ class ProductionAnalyzer:
                         state=CaptureState.RECAPTURE_REQUIRED,
                         reasonCodes=[f"CURRENT_SUBJECT_SEGMENTATION_FAILED:{str(exc)[:100]}"],
                     ),
+                    referenceBoardEvidence=reference_board_evidence,
                     normalization=NormalizationObservation(alignment=alignment),
                     analysis=AnalysisObservation(state=AnalysisState.NOT_RUN),
                 )
@@ -4199,6 +4238,7 @@ class ProductionAnalyzer:
                         state=CaptureState.RECAPTURE_REQUIRED,
                         reasonCodes=[rejected_reasons[0] if rejected_reasons else "PAIRED_SUBJECT_SCOPE_UNAVAILABLE"],
                     ),
+                    referenceBoardEvidence=reference_board_evidence,
                     normalization=NormalizationObservation(alignment=alignment),
                     analysis=AnalysisObservation(state=AnalysisState.NOT_RUN),
                 )
@@ -4472,7 +4512,7 @@ class ProductionAnalyzer:
                 "metric_subject_mask_sha256": source_metric_sha,
             })
         if (
-            request.schema_version == "1.5"
+            request.schema_version in {"1.5", "1.6"}
             and isinstance(self._artifact, ProductionArtifactV18)
             and spatial_evidence.state == "AVAILABLE"
         ):
@@ -4483,6 +4523,7 @@ class ProductionAnalyzer:
             schemaVersion=request.schema_version, requestId=request.request_id, analysisId=analysis_id,
             rawSha256=request.raw_sha256, simulation=request.simulation, resolvedVersions=resolved,
             captureAssessment=CaptureAssessment(state=CaptureState.ACCEPTED, reasonCodes=[]),
+            referenceBoardEvidence=reference_board_evidence,
             normalization=NormalizationObservation(
                 canonicalSha256=hashlib.sha256(normalized.encoded).hexdigest(),
                 targetCanonicalSha256=hashlib.sha256(normalized.encoded).hexdigest(),
