@@ -105,6 +105,8 @@ specified in [the fresh FIT-only camera augmentation protocol](mvtec_ad_fresh_fi
 
 The separate FIT-plus-raw-tuning development evaluator is specified in
 [the fresh normal-holdout evaluator protocol](mvtec_ad_fresh_normal_evaluator_protocol.md).
+Its one-time held-out normal selection and confirmation boundary is specified
+in [the fresh normal selection protocol](mvtec_ad_fresh_normal_selection_protocol.md).
 
 ## Commands
 

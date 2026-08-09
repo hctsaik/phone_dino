@@ -67,3 +67,6 @@ raw `NORMAL_SELECTION`; it will score all frozen candidates in one observation.
 The JSON-only selector may lock a research configuration but cannot promote it
 or start confirmation. Confirmation likewise requires an explicit one-time
 claim and only observes raw `NORMAL_CONFIRMATION`.
+
+The contract, claim, receipt, and confirmation boundary are specified in
+[the fresh normal selection and confirmation protocol](mvtec_ad_fresh_normal_selection_protocol.md).
