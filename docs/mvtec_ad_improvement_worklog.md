@@ -642,6 +642,38 @@ children. Its generation recorded commit `afc858e`; the repository worktree
 was not clean solely because the separately preserved bakeoff files and
 `pyproject.toml` changes remain user-owned and unstaged.
 
+### V2 development reports frozen and audited
+
+All four pre-registered V2 candidates completed in one in-memory DINO feature
+run. The independent report audit recomputed every report/self digest,
+calibration maximum, and category summary; it also checked the exact parent
+chain, V2 R3 package, current feature-extractor identity, and zero
+blind/anomaly/mask input counts. No successor selection, remaining-reserve, or
+parent-confirmation image was opened.
+
+| Candidate | File digest | Declared report digest | FIT prototype policy |
+| --- | --- | --- | --- |
+| `reserve-v2-raw-p2048-k5` | `sha256:7133e8447cd8b84cd296bbe8a7e46c8cd665d01388bfc3fdb42bb6922e8eb09d` | `sha256:285768da0f1b23fb152288001ece5d638ca6896dd009793763720dbafd6c1312` | 36 raw FIT feature inputs |
+| `reserve-v2-r3-p1024-k3` | `sha256:d23c9e241e2ef8f3ca8af3aaab368c25a722b94d7e80bee3057b8fe71e27a0bf` | `sha256:a97a8a049463eea537b65d7a0d5d6e2076fdbd1d393c52bf73744746ce39de64` | 36 raw FIT + 108 R3 feature inputs |
+| `reserve-v2-r3-p2048-k3` | `sha256:436a81d66ae5edd7b335e56a946d97b7909c7cd6c5fa4d4e7f7054a806eba709` | `sha256:17ab746b1e5a5c06ad66c8a9697e501895f915385b34e2999a5809a0b9962210` | 36 raw FIT + 108 R3 feature inputs |
+| `reserve-v2-r3-p2048-k5` | `sha256:b2b108b032b1fc524bc54be92a052b9c692683e3cad7a78eb59f814334a3c92e` | `sha256:d3b6fd751e9e9780226f690acc529b2a9fe00862b5cae1b136970aadd6b464dc` | 36 raw FIT + 108 R3 feature inputs |
+
+Every candidate used 12 raw tuning scores (4/category), never augmented for
+calibration. The resulting per-category raw-tuning maxima were:
+
+| Candidate | capsule | metal_nut | tile |
+| --- | ---: | ---: | ---: |
+| raw p2048 / K5 | 0.142542 | 0.182903 | 0.191811 |
+| R3 p1024 / K3 | 0.194577 | 0.263123 | 0.242084 |
+| R3 p2048 / K3 | 0.162358 | 0.237567 | 0.211751 |
+| R3 p2048 / K5 | 0.149514 | 0.199732 | 0.194456 |
+
+The reports record a non-clean Git worktree because unrelated user-owned
+files were preserved. Their validated module/model/preprocessing hashes, not
+that worktree flag, are the binding provenance. The next action is to freeze a
+V2 selection contract before the first successor `NORMAL_SELECTION` byte is
+opened.
+
 ## Physical readiness audit (2026-08-09)
 
 The offline research result was not used as a substitute for a physical-device
