@@ -154,6 +154,71 @@ def _normal_only_report(path: Path, source_sha256: str) -> Path:
     return path
 
 
+def _closed_normal_holdout_fixture(tmp_path: Path) -> tuple[Path, Path, dict[str, Path]]:
+    """Build a self-contained frozen manifest without public source metadata."""
+
+    source_root = tmp_path / "normal_sources"
+    partitions = (
+        "FIT",
+        "THRESHOLD_TUNING",
+        "NORMAL_SELECTION",
+        "NORMAL_CONFIRMATION",
+        "RESERVE_UNTOUCHED",
+    )
+    records: list[dict] = []
+    image_paths: dict[str, Path] = {}
+    for index, partition in enumerate(partitions):
+        relative_path = Path("images") / f"{index}.png"
+        image_path = source_root / relative_path
+        _write_image(image_path, index)
+        source_sha256 = holdout.sha256_file(image_path)
+        records.append({
+            "caseId": f"mvtec-ad/capsule/train-good/{source_sha256[7:]}",
+            "category": "capsule",
+            "relativePath": relative_path.as_posix(),
+            "sourceSha256": source_sha256,
+            "sourceGroupId": f"CONTENT_SHA256:{source_sha256[7:]}",
+            "acquisitionStratum": "OFFICIAL_MVTEC_TRAIN_GOOD",
+            "sourceRemotePath": f"data/data_6/{index}.png",
+            "expectedRemoteSha256": source_sha256,
+            "expectedRemoteBytes": image_path.stat().st_size,
+            "kind": "NOMINAL",
+            "defect": "good",
+            "partition": partition,
+        })
+        image_paths[partition] = image_path
+    records.sort(key=lambda record: record["caseId"])
+    document = {
+        "schemaVersion": holdout.NORMAL_HOLDOUT_SCHEMA,
+        "authoritative": False,
+        "productionAuthorized": False,
+        "purpose": holdout.HOLDOUT_PURPOSE,
+        "blindPolicy": holdout.HOLDOUT_BLIND_POLICY,
+        "sourcePoolFileSha256": "sha256:" + "1" * 64,
+        "sourcePoolDeclaredSha256": "sha256:" + "2" * 64,
+        "historicalLedgerFileSha256": "sha256:" + "3" * 64,
+        "historicalLedgerDeclaredSha256": "sha256:" + "4" * 64,
+        "planFileSha256": "sha256:" + "5" * 64,
+        "planDeclaredSha256": "sha256:" + "6" * 64,
+        "historyExclusion": {
+            "algorithm": holdout.HISTORY_EXCLUSION_ALGORITHM,
+            "matchedHistoricalSourceCount": 0,
+            "excludedSourceGroupCount": 0,
+            "eligibleSourceCount": len(records),
+            "eligibleSourceIdentitySha256": holdout.canonical_json_sha256([]),
+        },
+        "records": records,
+        "developmentIdentitySha256": holdout._holdout_partition_identity(records, {"FIT", "THRESHOLD_TUNING"}),
+        "normalSelectionIdentitySha256": holdout._holdout_partition_identity(records, {"NORMAL_SELECTION"}),
+        "normalConfirmationIdentitySha256": holdout._holdout_partition_identity(records, {"NORMAL_CONFIRMATION"}),
+        "reserveUntouchedIdentitySha256": holdout._holdout_partition_identity(records, {"RESERVE_UNTOUCHED"}),
+    }
+    document["normalHoldoutManifestSha256"] = _self_digest(document, "normalHoldoutManifestSha256")
+    manifest_path = tmp_path / "holdout" / "normal_holdout.json"
+    _write_json(manifest_path, document)
+    return manifest_path, source_root, image_paths
+
+
 @pytest.fixture
 def frozen_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path | list[dict]]:
     source_root = tmp_path / "fresh_sources"
@@ -346,6 +411,48 @@ def test_historical_ledger_rejects_unlinked_augmented_parent(tmp_path: Path) -> 
         holdout.build_historical_normal_usage_ledger([report_path], tmp_path / "ledger.json")
 
 
+def test_evaluation_safe_loader_reads_only_requested_normal_partitions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest_path, source_root, image_paths = _closed_normal_holdout_fixture(tmp_path)
+    # A broken selection file proves this reader neither opens nor decodes it
+    # while preparing the FIT/tuning development envelope.
+    image_paths["NORMAL_SELECTION"].write_bytes(b"not-a-normal-image")
+
+    def unexpected_metadata_read(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("evaluation-safe loader must not read source metadata")
+
+    monkeypatch.setattr(holdout, "_load_pinned_source_metadata", unexpected_metadata_read)
+    document, _, records = holdout.load_evaluation_safe_normal_holdout_inputs(
+        manifest_path,
+        source_root=source_root,
+        partitions={"FIT", "THRESHOLD_TUNING"},
+    )
+    assert document["blindPolicy"] == holdout.HOLDOUT_BLIND_POLICY
+    assert {record["partition"] for record in records} == {"FIT", "THRESHOLD_TUNING"}
+    assert all(record["imagePath"].is_file() for record in records)
+    with pytest.raises(holdout.NormalHoldoutError, match="bytes do not match"):
+        holdout.load_evaluation_safe_normal_holdout_inputs(
+            manifest_path,
+            source_root=source_root,
+            partitions={"NORMAL_SELECTION"},
+        )
+
+
+def test_evaluation_safe_loader_rejects_non_normal_closed_record(tmp_path: Path) -> None:
+    manifest_path, source_root, _ = _closed_normal_holdout_fixture(tmp_path)
+    document = json.loads(manifest_path.read_text(encoding="utf-8"))
+    document["records"][0]["defect"] = "crack"
+    document["normalHoldoutManifestSha256"] = _self_digest(document, "normalHoldoutManifestSha256")
+    _write_json(manifest_path, document)
+    with pytest.raises(holdout.NormalHoldoutError, match="nominal good"):
+        holdout.load_evaluation_safe_normal_holdout_inputs(
+            manifest_path,
+            source_root=source_root,
+            partitions={"FIT"},
+        )
+
+
 def test_rejects_duplicate_json_keys_repo_ancestor_and_manifest_tamper(
     frozen_inputs: dict[str, Path | list[dict]],
 ) -> None:
@@ -430,7 +537,7 @@ def test_rejects_duplicate_json_keys_repo_ancestor_and_manifest_tamper(
     next(record for record in document["records"] if record["partition"] != "FIT")["partition"] = "FIT"
     document["normalHoldoutManifestSha256"] = _self_digest(document, "normalHoldoutManifestSha256")
     _write_json(holdout_path, document)
-    with pytest.raises(holdout.NormalHoldoutError, match="records do not match"):
+    with pytest.raises(holdout.NormalHoldoutError, match="does not match"):
         holdout.load_validated_normal_holdout_manifest(
             holdout_path,
             bound_pool_path,

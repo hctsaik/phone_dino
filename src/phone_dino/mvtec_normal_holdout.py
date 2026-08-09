@@ -60,6 +60,47 @@ PLAN_QUOTA_FIELDS = {
     "normalConfirmationGroupCount",
     "reserveUntouchedGroupCount",
 }
+HOLDOUT_RECORD_FIELDS = {
+    "caseId",
+    "category",
+    "relativePath",
+    "sourceSha256",
+    "sourceGroupId",
+    "acquisitionStratum",
+    "sourceRemotePath",
+    "expectedRemoteSha256",
+    "expectedRemoteBytes",
+    "kind",
+    "defect",
+    "partition",
+}
+HISTORY_EXCLUSION_FIELDS = {
+    "algorithm",
+    "matchedHistoricalSourceCount",
+    "excludedSourceGroupCount",
+    "eligibleSourceCount",
+    "eligibleSourceIdentitySha256",
+}
+NORMAL_HOLDOUT_FIELDS = {
+    "schemaVersion",
+    "authoritative",
+    "productionAuthorized",
+    "purpose",
+    "blindPolicy",
+    "sourcePoolFileSha256",
+    "sourcePoolDeclaredSha256",
+    "historicalLedgerFileSha256",
+    "historicalLedgerDeclaredSha256",
+    "planFileSha256",
+    "planDeclaredSha256",
+    "historyExclusion",
+    "records",
+    "developmentIdentitySha256",
+    "normalSelectionIdentitySha256",
+    "normalConfirmationIdentitySha256",
+    "reserveUntouchedIdentitySha256",
+    "normalHoldoutManifestSha256",
+}
 FEATURE_INPUT_FIELDS = {
     "caseId",
     "category",
@@ -1322,6 +1363,185 @@ def _holdout_partition_identity(records: list[dict[str, Any]], partitions: set[s
     ])
 
 
+def _validate_history_exclusion(value: object) -> None:
+    if not isinstance(value, dict):
+        raise NormalHoldoutError("normal holdout manifest historyExclusion must be an object")
+    _require_exact_fields(
+        value,
+        name="normal holdout manifest historyExclusion",
+        required=HISTORY_EXCLUSION_FIELDS,
+    )
+    if value.get("algorithm") != HISTORY_EXCLUSION_ALGORITHM:
+        raise NormalHoldoutError("normal holdout manifest history exclusion algorithm is unsupported")
+    for name in ("matchedHistoricalSourceCount", "excludedSourceGroupCount", "eligibleSourceCount"):
+        _require_nonnegative_int(value, name)
+    _require_sha256(value, "eligibleSourceIdentitySha256")
+
+
+def _validate_closed_holdout_record(
+    value: object,
+    *,
+    seen_case_ids: set[str],
+    seen_paths: set[str],
+    seen_sources: set[str],
+    seen_remote_paths: set[str],
+    groups: dict[str, tuple[str, str, str]],
+) -> dict[str, Any]:
+    """Validate one record without opening its source image or source metadata."""
+
+    if not isinstance(value, dict):
+        raise NormalHoldoutError("normal holdout manifest record must be an object")
+    _require_exact_fields(value, name="normal holdout manifest record", required=HOLDOUT_RECORD_FIELDS)
+    case_id = _require_string(value, "caseId")
+    if case_id in seen_case_ids:
+        raise NormalHoldoutError("normal holdout manifest caseId is duplicated")
+    seen_case_ids.add(case_id)
+    category = _require_string(value, "category")
+    relative_path = _safe_relative_path(value.get("relativePath"), name="normal holdout relativePath")
+    if relative_path.as_posix() in seen_paths:
+        raise NormalHoldoutError("normal holdout manifest relativePath is duplicated")
+    seen_paths.add(relative_path.as_posix())
+    source_sha256 = _require_sha256(value, "sourceSha256")
+    if source_sha256 in seen_sources:
+        raise NormalHoldoutError("normal holdout manifest sourceSha256 is duplicated")
+    seen_sources.add(source_sha256)
+    source_group_id = _require_string(value, "sourceGroupId")
+    acquisition_stratum = _require_string(value, "acquisitionStratum")
+    if acquisition_stratum != "OFFICIAL_MVTEC_TRAIN_GOOD":
+        raise NormalHoldoutError("normal holdout manifest acquisitionStratum is unsupported")
+    partition = value.get("partition")
+    if partition not in HOLDOUT_PARTITIONS:
+        raise NormalHoldoutError("normal holdout manifest partition is unsupported")
+    existing_group = groups.setdefault(source_group_id, (category, acquisition_stratum, str(partition)))
+    if existing_group != (category, acquisition_stratum, partition):
+        raise NormalHoldoutError("normal holdout manifest sourceGroupId crosses category, stratum, or partition")
+    source_remote_path = _safe_relative_path(value.get("sourceRemotePath"), name="normal holdout sourceRemotePath").as_posix()
+    if source_remote_path in seen_remote_paths:
+        raise NormalHoldoutError("normal holdout manifest sourceRemotePath is duplicated")
+    seen_remote_paths.add(source_remote_path)
+    expected_remote_sha256 = _require_sha256(value, "expectedRemoteSha256")
+    expected_remote_bytes = _require_nonnegative_int(value, "expectedRemoteBytes")
+    if expected_remote_bytes == 0:
+        raise NormalHoldoutError("normal holdout manifest expectedRemoteBytes must be positive")
+    if value.get("kind") != "NOMINAL" or value.get("defect") != "good":
+        raise NormalHoldoutError("normal holdout manifest must contain nominal good records only")
+    if expected_remote_sha256 != source_sha256:
+        raise NormalHoldoutError("normal holdout manifest remote and source digests do not match")
+    if source_group_id != f"CONTENT_SHA256:{source_sha256[7:]}":
+        raise NormalHoldoutError("normal holdout manifest exact-content sourceGroupId is invalid")
+    if case_id != f"mvtec-ad/{category}/train-good/{source_sha256[7:]}":
+        raise NormalHoldoutError("normal holdout manifest caseId does not bind the normal source digest")
+    return dict(value)
+
+
+def _validate_closed_normal_holdout_document(document: dict[str, Any]) -> list[dict[str, Any]]:
+    """Validate the normal-only, self-contained portion of a frozen cohort.
+
+    This deliberately does not open the pool, ledger, plan, or public source
+    inventory.  It is the boundary used by later normal-only evaluation code,
+    which must never parse public metadata that also lists test/anomaly rows.
+    """
+
+    _require_exact_fields(document, name="normal holdout manifest", required=NORMAL_HOLDOUT_FIELDS)
+    if document.get("schemaVersion") != NORMAL_HOLDOUT_SCHEMA:
+        raise NormalHoldoutError("normal holdout manifest schema is unsupported")
+    if document.get("authoritative") is not False or document.get("productionAuthorized") is not False:
+        raise NormalHoldoutError("normal holdout manifest must be non-authoritative and non-production")
+    if document.get("purpose") != HOLDOUT_PURPOSE or document.get("blindPolicy") != HOLDOUT_BLIND_POLICY:
+        raise NormalHoldoutError("normal holdout manifest purpose is unsafe")
+    if document.get("normalHoldoutManifestSha256") != _document_digest(document, "normalHoldoutManifestSha256"):
+        raise NormalHoldoutError("normal holdout manifest digest does not match")
+    for name in (
+        "sourcePoolFileSha256",
+        "sourcePoolDeclaredSha256",
+        "historicalLedgerFileSha256",
+        "historicalLedgerDeclaredSha256",
+        "planFileSha256",
+        "planDeclaredSha256",
+        "developmentIdentitySha256",
+        "normalSelectionIdentitySha256",
+        "normalConfirmationIdentitySha256",
+        "reserveUntouchedIdentitySha256",
+    ):
+        _require_sha256(document, name)
+    _validate_history_exclusion(document.get("historyExclusion"))
+    raw_records = document.get("records")
+    if not isinstance(raw_records, list) or not raw_records:
+        raise NormalHoldoutError("normal holdout manifest has no records")
+    seen_case_ids: set[str] = set()
+    seen_paths: set[str] = set()
+    seen_sources: set[str] = set()
+    seen_remote_paths: set[str] = set()
+    groups: dict[str, tuple[str, str, str]] = {}
+    records = [
+        _validate_closed_holdout_record(
+            value,
+            seen_case_ids=seen_case_ids,
+            seen_paths=seen_paths,
+            seen_sources=seen_sources,
+            seen_remote_paths=seen_remote_paths,
+            groups=groups,
+        )
+        for value in raw_records
+    ]
+    if [record["caseId"] for record in records] != sorted(record["caseId"] for record in records):
+        raise NormalHoldoutError("normal holdout manifest records must be sorted by caseId")
+    identity_expectations = {
+        "developmentIdentitySha256": _holdout_partition_identity(records, {"FIT", "THRESHOLD_TUNING"}),
+        "normalSelectionIdentitySha256": _holdout_partition_identity(records, {"NORMAL_SELECTION"}),
+        "normalConfirmationIdentitySha256": _holdout_partition_identity(records, {"NORMAL_CONFIRMATION"}),
+        "reserveUntouchedIdentitySha256": _holdout_partition_identity(records, {"RESERVE_UNTOUCHED"}),
+    }
+    for name, expected in identity_expectations.items():
+        if document.get(name) != expected:
+            raise NormalHoldoutError(f"normal holdout manifest {name} does not match")
+    return records
+
+
+def load_evaluation_safe_normal_holdout_inputs(
+    manifest_path: Path,
+    *,
+    source_root: Path,
+    partitions: object,
+) -> tuple[dict[str, Any], str, list[dict[str, Any]]]:
+    """Open only requested normal partitions from a closed holdout manifest.
+
+    Unlike :func:`load_validated_normal_holdout_manifest`, this phase-safe
+    reader never opens the source pool, usage ledger, plan, or MVTec
+    ``samples.json`` inventory.  It validates the holdout's closed normal-only
+    fields, then hashes and decodes only the requested source images.
+    """
+
+    if isinstance(partitions, str):
+        raise NormalHoldoutError("normal holdout evaluation partitions must be a non-string collection")
+    try:
+        requested_partitions = set(partitions)
+    except TypeError as error:
+        raise NormalHoldoutError("normal holdout evaluation partitions must be a collection") from error
+    if not requested_partitions or not requested_partitions.issubset(set(HOLDOUT_PARTITIONS)):
+        raise NormalHoldoutError("normal holdout evaluation partitions are unsupported")
+    if any(not isinstance(partition, str) for partition in requested_partitions):
+        raise NormalHoldoutError("normal holdout evaluation partitions are unsupported")
+    document, manifest_file_sha256 = _read_json(manifest_path, description="normal holdout manifest")
+    records = _validate_closed_normal_holdout_document(document)
+    _require_external_source_root(source_root)
+    selected: list[dict[str, Any]] = []
+    for record in records:
+        if record["partition"] not in requested_partitions:
+            continue
+        relative_path = _safe_relative_path(record["relativePath"], name="normal holdout relativePath")
+        source_path = _safe_file_under(source_root, relative_path, description="normal holdout evaluation image")
+        if sha256_file(source_path) != record["sourceSha256"] or source_path.stat().st_size != record["expectedRemoteBytes"]:
+            raise NormalHoldoutError("normal holdout evaluation image bytes do not match the frozen source")
+        _require_decodable_image(source_path, description="normal holdout evaluation image")
+        if sha256_file(source_path) != record["sourceSha256"]:
+            raise NormalHoldoutError("normal holdout evaluation image changed while it was being decoded")
+        selected.append({**record, "imagePath": source_path})
+    if not selected:
+        raise NormalHoldoutError("normal holdout has no records in the requested evaluation partitions")
+    return document, manifest_file_sha256, selected
+
+
 def build_normal_holdout_manifest(
     pool_path: Path,
     ledger_path: Path,
@@ -1401,25 +1621,7 @@ def load_validated_normal_holdout_manifest(
         historical_hashes=historical_hashes,
     )
     document, manifest_file_sha256 = _read_json(manifest_path, description="normal holdout manifest")
-    _require_exact_fields(
-        document,
-        name="normal holdout manifest",
-        required={
-            "schemaVersion", "authoritative", "productionAuthorized", "purpose", "blindPolicy", "sourcePoolFileSha256",
-            "sourcePoolDeclaredSha256", "historicalLedgerFileSha256", "historicalLedgerDeclaredSha256", "planFileSha256",
-            "planDeclaredSha256", "historyExclusion", "records", "developmentIdentitySha256",
-            "normalSelectionIdentitySha256", "normalConfirmationIdentitySha256", "reserveUntouchedIdentitySha256",
-            "normalHoldoutManifestSha256",
-        },
-    )
-    if document.get("schemaVersion") != NORMAL_HOLDOUT_SCHEMA:
-        raise NormalHoldoutError("normal holdout manifest schema is unsupported")
-    if document.get("authoritative") is not False or document.get("productionAuthorized") is not False:
-        raise NormalHoldoutError("normal holdout manifest must be non-authoritative and non-production")
-    if document.get("purpose") != HOLDOUT_PURPOSE or document.get("blindPolicy") != HOLDOUT_BLIND_POLICY:
-        raise NormalHoldoutError("normal holdout manifest purpose is unsafe")
-    if document.get("normalHoldoutManifestSha256") != _document_digest(document, "normalHoldoutManifestSha256"):
-        raise NormalHoldoutError("normal holdout manifest digest does not match")
+    closed_records = _validate_closed_normal_holdout_document(document)
     bindings = {
         "sourcePoolFileSha256": pool_file_sha256,
         "sourcePoolDeclaredSha256": pool["normalSourcePoolSha256"],
@@ -1439,15 +1641,6 @@ def load_validated_normal_holdout_manifest(
         quotas,
         partition_seed_sha256=str(plan["partitionSeedSha256"]),
     )
-    if document.get("records") != expected_records:
+    if closed_records != expected_records:
         raise NormalHoldoutError("normal holdout manifest records do not match its frozen allocation")
-    identity_expectations = {
-        "developmentIdentitySha256": _holdout_partition_identity(expected_records, {"FIT", "THRESHOLD_TUNING"}),
-        "normalSelectionIdentitySha256": _holdout_partition_identity(expected_records, {"NORMAL_SELECTION"}),
-        "normalConfirmationIdentitySha256": _holdout_partition_identity(expected_records, {"NORMAL_CONFIRMATION"}),
-        "reserveUntouchedIdentitySha256": _holdout_partition_identity(expected_records, {"RESERVE_UNTOUCHED"}),
-    }
-    for name, expected in identity_expectations.items():
-        if document.get(name) != expected:
-            raise NormalHoldoutError(f"normal holdout manifest {name} does not match")
     return document, manifest_file_sha256

@@ -16,6 +16,15 @@ iteration, and normal-candidate selector tools. It does not modify or consume
 their feature caches, model outputs, blind scores, masks, or DINO runtime.
 This preserves the locked V3--V5 provenance contracts.
 
+After this cohort is frozen, phase-specific tooling must use
+`load_evaluation_safe_normal_holdout_inputs()` rather than the full
+freeze-audit loader. The phase-safe reader validates the closed
+`normal_holdout.json` contract and opens only the requested normal images; it
+does not open the source pool, history ledger, plan, or public `samples.json`
+inventory. The latter contains public test/anomaly metadata and is permitted
+only during acquisition/freeze audit, never during FIT augmentation, tuning,
+selection, or confirmation.
+
 The only public source accepted by the current schema is the pinned Voxel51
 MVTec mirror revision `30a183a3b96e3aef953f230784b123b719b09d97`, using its
 `samples.json` inventory with raw SHA-256
@@ -84,6 +93,12 @@ Neither normal selection nor confirmation may select a winner, regenerate an
 augmentation, alter a threshold, or open blind/anomaly data. Any further
 iteration needs a newly frozen normal cohort or an explicitly separate
 development envelope.
+
+The first fresh augmentation package is likewise separate from V3--V5. It may
+derive bounded camera/coding variants from `FIT` only. Raw
+`THRESHOLD_TUNING`, `NORMAL_SELECTION`, and `NORMAL_CONFIRMATION` inputs must
+remain unmodified normal images: synthetic variants must not influence a
+threshold, candidate selection, or confirmation observation.
 
 ## Commands
 

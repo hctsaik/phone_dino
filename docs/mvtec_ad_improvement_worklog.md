@@ -373,6 +373,26 @@ partition. The next standalone evaluator may tune only on its development
 partition, then make one observation-only normal-confirmation measurement; it
 must not use confirmation data to select the next augmentation.
 
+## Phase-safe normal evaluator boundary (2026-08-09)
+
+The fresh cohort now has a dedicated phase-safe reader. It validates the
+closed normal-holdout manifest and opens only the requested normal image
+partitions. It never opens the source pool, historical ledger, allocation plan,
+or pinned public `samples.json` inventory; the latter includes public test and
+anomaly metadata and remains restricted to the acquisition/freeze audit.
+
+The real external cohort was revalidated through this reader for `FIT` plus
+`THRESHOLD_TUNING`: 144 FIT and 48 tuning originals were rehashed and decoded
+under holdout manifest
+`sha256:51a359f5d579a99321dc33687fecc6d9a8db92fb7f921960bbb6898c23e2e74e`.
+No selection, confirmation, reserve, blind, anomaly, or mask input was opened.
+
+The initial development augmentation will be a new standalone fresh-cohort
+tool, not an adapter to the locked V3--V5 generator. It will derive bounded
+camera/coding variants from FIT parents only; tuning, selection, and
+confirmation remain raw normal originals. This keeps the new evidence chain
+separate from historical recipe/module/cache identities.
+
 ## Physical readiness audit (2026-08-09)
 
 The offline research result was not used as a substitute for a physical-device
