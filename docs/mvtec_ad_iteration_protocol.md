@@ -26,9 +26,10 @@ explicit `blindAugmentedCount: 0` in every augmented report.
 
 `run_mvtec_ad_iteration.py` loads the same local DINOv2 weights and uses the
 same `Resize(256) + CenterCrop(224)` preprocessing as the production embedder,
-but its batching and cache exist only in the offline research tool. It streams
-one feature array per input into an optional cache outside Git, processes
-exact nearest-normal cosine distances in bounded prototype blocks, and records
+but its batching and cache exist only in the offline research tool. It stages
+new feature arrays for an optional cache outside Git, verifies extractor
+provenance after inference, then publishes only verified entries. It processes
+exact nearest-normal cosine distances in bounded prototype blocks and records
 batch/cache/timing/runtime provenance.
 
 It retains the 16 × 16 nearest-normal patch-distance grid for blind samples.
@@ -61,18 +62,37 @@ existing report.
 
 ## Normal-only configuration lock
 
-Iteration-report schema `1.2` adds `normalOnlyEvidence` and an exact candidate
+Iteration-report schema `1.3` adds `normalOnlyEvidence` and an exact candidate
 configuration. The evidence contains score-free, stable-sorted feature,
 calibration, and original-tuning membership lists plus independently checked
 digests. A normal-only report must have zero blind and anomaly feature inputs,
 only `THRESHOLD_TUNING`/`NOMINAL` score records, and no pixel metrics. Reports
 that do not meet those conditions cannot enter a formal candidate comparison.
 
+Every 1.3 report also emits a canonical `featureExtractor` object and its
+digest. It pins the local DINO repository content tree, model weights,
+entrypoint, exact preprocessing configuration, runner/production/loader/
+augmentation-source modules, Python/Torch/Torchvision/Pillow/NumPy versions,
+thread count, and relevant Torch backend settings. The runner rehashes this
+identity after model loading and after feature extraction; a change fails the
+run before a report can be written or a newly extracted cache entry can be
+published. The report separates cache validation and cache-write timing.
+
+Feature-cache schema `1.1` keys entries with that extractor identity and
+stores every feature as a content-addressed `.npy` plus strict metadata. On a
+cache hit it verifies the metadata, input identity, fixed DINO feature shape
+and `float32` dtype, file digest, and finite values. A legacy or incomplete
+cache entry is a miss, never an accepted feature. This makes a local model
+repository, preprocessing, dependency, or feature-array change invalidate the
+cache instead of silently mixing results between configurations.
+
 After a reference normal-only report exists, freeze an external selection
-contract before running the remaining predeclared candidates. Each candidate
+contract (schema `1.1`) before running the remaining predeclared candidates.
+Each candidate
 entry binds its exact algorithm configuration (including patch-memory and
 top-k settings), not just a friendly ID. The contract also binds the
-source-manifest identity, model/preprocessing/tool digests, exact normal
+source-manifest identity, model-repository/extractor/preprocessing/tool
+digests, exact normal
 feature/calibration/tuning membership, normal augmentation envelope,
 reference-report digest, explicit per-category normal-robustness caps, and a
 fixed lexicographic objective.
@@ -113,10 +133,11 @@ JSON bytes it validates and emits either a research configuration lock or
 authorizes production/physical use.
 
 Do not compare an unaugmented report against an augmented report through this
-selector: their normal input identities differ. Legacy `1.0`/`1.1` iteration
-reports also lack the required normal-only evidence; regenerate the external package
-and rerun only `--normal-only` after the current tool revision instead of
-retrofitting an old report.
+selector: their normal input identities differ. Legacy `1.0`/`1.1`/`1.2`
+iteration reports lack either the required normal-only evidence or full feature
+extractor provenance; preserve them as historical audit artifacts, but
+regenerate the external package and rerun only `--normal-only` after the
+current tool revision instead of retrofitting an old report.
 
 ## Strict comparison
 

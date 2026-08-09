@@ -14,13 +14,14 @@ import json
 import math
 import os
 import platform
+import stat
 import sys
 import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from PIL import Image
+from PIL import Image, __version__ as PILLOW_VERSION
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -37,9 +38,32 @@ from phone_dino.mvtec_research import (
 from phone_dino.production import DINO_INPUT_SIZE, DINO_RESIZE_SHORT_EDGE, DinoV2Embedder
 
 
-ITERATION_SCHEMA_VERSION = "phone-dino.mvtec-ad-iteration-report/1.2"
-FEATURE_CACHE_SCHEMA_VERSION = "phone-dino.mvtec-ad-feature-cache/1.0"
+ITERATION_SCHEMA_VERSION = "phone-dino.mvtec-ad-iteration-report/1.3"
+FEATURE_CACHE_SCHEMA_VERSION = "phone-dino.mvtec-ad-feature-cache/1.1"
+FEATURE_CACHE_ENTRY_SCHEMA_VERSION = "phone-dino.mvtec-ad-feature-cache-entry/1.0"
+FEATURE_EXTRACTOR_SCHEMA_VERSION = "phone-dino.mvtec-ad-feature-extractor/1.0"
 PREPROCESSING_ID = "DINOV2_RESIZE_SHORT_EDGE_256_CENTER_CROP_224_IMAGENET_NORMALIZE_V1"
+FEATURE_EXTRACTOR_SOURCE_FILES = {
+    "iterationToolSha256": Path(__file__),
+    "productionModuleSha256": REPOSITORY_ROOT / "src" / "phone_dino" / "production.py",
+    "enginesModuleSha256": REPOSITORY_ROOT / "src" / "phone_dino" / "engines.py",
+    "mvtecResearchModuleSha256": REPOSITORY_ROOT / "src" / "phone_dino" / "mvtec_research.py",
+}
+CACHE_IGNORED_DIRECTORY_NAMES = frozenset({".git", "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache"})
+FEATURE_SHAPES = {"global": (384,), "patch": (256, 384)}
+FEATURE_CACHE_METADATA_FIELDS = {
+    "schemaVersion",
+    "key",
+    "featureKind",
+    "sourceSha256",
+    "augmentationRecipeSha256",
+    "featureExtractor",
+    "featureExtractorIdentitySha256",
+    "shape",
+    "dtype",
+    "dataFileName",
+    "arrayFileSha256",
+}
 
 
 class IterationError(ValueError):
@@ -89,6 +113,120 @@ def _read_json(path: Path, *, description: str) -> dict[str, Any]:
     if not isinstance(document, dict):
         raise IterationError(f"{description} must be a JSON object")
     return document
+
+
+def _is_link_or_reparse_point(path: Path) -> bool:
+    """Reject POSIX links and Windows junction/reparse entries without resolving them."""
+
+    try:
+        metadata = path.stat(follow_symlinks=False)
+    except OSError as error:
+        raise IterationError(f"unable to stat immutable input: {path}") from error
+    reparse_attribute = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    return path.is_symlink() or bool(getattr(metadata, "st_file_attributes", 0) & reparse_attribute)
+
+
+def _immutable_file_sha256(path: Path, *, description: str) -> str:
+    if not path.is_file() or _is_link_or_reparse_point(path):
+        raise IterationError(f"{description} must be a regular non-link file: {path}")
+    return sha256_file(path)
+
+
+def sha256_directory(root: Path) -> str:
+    """Return a stable content digest for a local model source tree.
+
+    Git metadata and interpreter caches are intentionally excluded: neither is
+    executable model source. Symlinks are rejected so a model repository cannot
+    silently acquire code outside its declared root.
+    """
+
+    if not root.is_dir() or _is_link_or_reparse_point(root):
+        raise IterationError(f"model repository must be a non-symlink directory: {root}")
+    entries: list[tuple[str, Path]] = []
+
+    def visit(directory: Path) -> None:
+        try:
+            children = list(os.scandir(directory))
+        except OSError as error:
+            raise IterationError(f"unable to enumerate model repository: {directory}") from error
+        for child in children:
+            candidate = Path(child.path)
+            relative = candidate.relative_to(root)
+            if _is_link_or_reparse_point(candidate):
+                raise IterationError(f"model repository contains a link or reparse point: {relative.as_posix()}")
+            if child.is_dir(follow_symlinks=False):
+                if any(part in CACHE_IGNORED_DIRECTORY_NAMES for part in relative.parts):
+                    continue
+                entries.append(("D", candidate))
+                visit(candidate)
+            elif child.is_file(follow_symlinks=False):
+                if any(part in CACHE_IGNORED_DIRECTORY_NAMES for part in relative.parts) or candidate.suffix == ".pyc":
+                    continue
+                entries.append(("F", candidate))
+            else:
+                raise IterationError(f"model repository contains an unsupported entry: {relative.as_posix()}")
+
+    visit(root)
+    if not any(kind == "F" for kind, _ in entries):
+        raise IterationError("model repository has no source files to hash")
+    digest = hashlib.sha256()
+    for kind, candidate in sorted(entries, key=lambda item: (item[0], item[1].relative_to(root).as_posix())):
+        digest.update(kind.encode("ascii"))
+        digest.update(b"\0")
+        digest.update(candidate.relative_to(root).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        if kind == "F":
+            digest.update(_immutable_file_sha256(candidate, description="model repository source").encode("ascii"))
+            digest.update(b"\0")
+    return f"sha256:{digest.hexdigest()}"
+
+
+def feature_extractor_identity(
+    *,
+    model_repo: Path,
+    model_weights_sha256: str,
+    device: str,
+) -> dict[str, Any]:
+    """Bind every local implementation and dependency that produces features."""
+
+    import numpy as np
+    import torch
+    import torchvision
+
+    mkldnn_backend = getattr(torch.backends, "mkldnn", None)
+    source_digests = {
+        name: _immutable_file_sha256(path, description="feature extractor source")
+        for name, path in FEATURE_EXTRACTOR_SOURCE_FILES.items()
+    }
+    return {
+        "schemaVersion": FEATURE_EXTRACTOR_SCHEMA_VERSION,
+        "modelWeightsSha256": model_weights_sha256,
+        "modelRepositorySha256": sha256_directory(model_repo),
+        "preprocessingId": PREPROCESSING_ID,
+        "preprocessing": {
+            "colorSpace": "RGB",
+            "resizeShortEdge": DINO_RESIZE_SHORT_EDGE,
+            "centerCropWidth": DINO_INPUT_SIZE,
+            "centerCropHeight": DINO_INPUT_SIZE,
+            "resizeAntialias": True,
+            "normalizeMean": [0.485, 0.456, 0.406],
+            "normalizeStd": [0.229, 0.224, 0.225],
+        },
+        "modelEntrypoint": "dinov2_vits14",
+        "device": device,
+        **source_digests,
+        "pythonVersion": platform.python_version(),
+        "numpyVersion": np.__version__,
+        "torchVersion": torch.__version__,
+        "torchvisionVersion": torchvision.__version__,
+        "pillowVersion": PILLOW_VERSION,
+        "torchThreadCount": torch.get_num_threads(),
+        "torchBackend": {
+            "deterministicAlgorithmsEnabled": bool(torch.are_deterministic_algorithms_enabled()),
+            "mkldnnAvailable": bool(mkldnn_backend and mkldnn_backend.is_available()),
+            "mkldnnEnabled": bool(mkldnn_backend and mkldnn_backend.enabled),
+        },
+    }
 
 
 def load_frozen_records(manifest_path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -265,46 +403,171 @@ def patch_knn_scores_blocked(
 class FeatureCache:
     """A conservative image-feature cache for repeatable offline iterations."""
 
-    def __init__(self, root: Path, *, model_weights_sha256: str, source_sha256: str):
+    def __init__(
+        self,
+        root: Path,
+        *,
+        feature_extractor: dict[str, Any],
+        feature_extractor_identity_sha256: str,
+    ):
         if _is_under(REPOSITORY_ROOT, root):
             raise IterationError("feature cache must stay outside the Git working tree")
+        if canonical_json_sha256(feature_extractor) != feature_extractor_identity_sha256:
+            raise IterationError("feature cache extractor identity digest does not match")
         self.root = root
-        self.model_weights_sha256 = model_weights_sha256
-        self.source_sha256 = source_sha256
+        self.feature_extractor = feature_extractor
+        self.feature_extractor_identity_sha256 = feature_extractor_identity_sha256
         self.root.mkdir(parents=True, exist_ok=True)
+        if _is_link_or_reparse_point(self.root):
+            raise IterationError("feature cache root must not be a link or reparse point")
 
     def key_for(self, record: dict[str, Any], feature_kind: str) -> str:
+        if feature_kind not in FEATURE_SHAPES:
+            raise IterationError("feature cache key has an unsupported feature kind")
         return canonical_json_sha256({
             "schemaVersion": FEATURE_CACHE_SCHEMA_VERSION,
             "featureKind": feature_kind,
             "sourceSha256": record["sourceSha256"],
             "augmentationRecipeSha256": record.get("augmentationRecipeSha256"),
-            "modelWeightsSha256": self.model_weights_sha256,
-            "preprocessingId": PREPROCESSING_ID,
-            "iterationToolSha256": self.source_sha256,
+            "featureExtractorIdentitySha256": self.feature_extractor_identity_sha256,
         })[7:]
 
-    def get(self, key: str) -> object | None:
+    @staticmethod
+    def _validate_key(key: str) -> str:
+        if len(key) != 64:
+            raise IterationError("feature cache key is invalid")
+        try:
+            int(key, 16)
+        except ValueError as error:
+            raise IterationError("feature cache key is invalid") from error
+        return key
+
+    def _metadata_path(self, key: str) -> Path:
+        return self.root / f"{key}.json"
+
+    @staticmethod
+    def _array_file_name(key: str, array_file_sha256: str) -> str:
+        return f"{key}.{array_file_sha256[7:]}.npy"
+
+    @staticmethod
+    def _validate_feature_array(values: object, *, feature_kind: str) -> object:
         import numpy as np
 
-        path = self.root / f"{key}.npy"
-        if not path.exists():
+        if feature_kind not in FEATURE_SHAPES:
+            raise IterationError("feature cache has an unsupported feature kind")
+        array = np.asarray(values)
+        expected_shape = FEATURE_SHAPES[feature_kind]
+        if array.dtype != np.dtype(np.float32) or tuple(array.shape) != expected_shape:
+            raise IterationError(f"feature cache entry has an unexpected {feature_kind} feature shape or dtype")
+        if not np.all(np.isfinite(array)):
+            raise IterationError("feature cache entry is non-finite")
+        return np.ascontiguousarray(array)
+
+    @staticmethod
+    def _write_json_fsync(path: Path, document: dict[str, Any]) -> None:
+        payload = (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+        with path.open("wb") as output:
+            output.write(payload)
+            output.flush()
+            os.fsync(output.fileno())
+
+    def get(self, key: str, *, feature_kind: str, record: dict[str, Any]) -> object | None:
+        import numpy as np
+
+        self._validate_key(key)
+        metadata_path = self._metadata_path(key)
+        if not metadata_path.exists():
             return None
+        if not metadata_path.is_file() or _is_link_or_reparse_point(metadata_path):
+            raise IterationError("feature cache metadata must be a regular non-link file")
         try:
-            values = np.load(path, allow_pickle=False)
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise IterationError(f"feature cache metadata is unreadable: {metadata_path}") from error
+        if not isinstance(metadata, dict) or set(metadata) != FEATURE_CACHE_METADATA_FIELDS:
+            raise IterationError("feature cache metadata has an invalid schema")
+        if (
+            metadata.get("schemaVersion") != FEATURE_CACHE_ENTRY_SCHEMA_VERSION
+            or metadata.get("key") != key
+            or metadata.get("featureKind") != feature_kind
+            or metadata.get("sourceSha256") != record.get("sourceSha256")
+            or metadata.get("augmentationRecipeSha256") != record.get("augmentationRecipeSha256")
+            or metadata.get("featureExtractor") != self.feature_extractor
+            or metadata.get("featureExtractorIdentitySha256") != self.feature_extractor_identity_sha256
+            or metadata.get("dtype") != "float32"
+        ):
+            raise IterationError("feature cache metadata does not match the requested feature identity")
+        shape = metadata.get("shape")
+        if not isinstance(shape, list) or any(not isinstance(value, int) or isinstance(value, bool) for value in shape):
+            raise IterationError("feature cache metadata shape is invalid")
+        expected_shape = list(FEATURE_SHAPES.get(feature_kind, ()))
+        if shape != expected_shape:
+            raise IterationError("feature cache metadata shape does not match the feature contract")
+        array_digest = metadata.get("arrayFileSha256")
+        if not isinstance(array_digest, str) or len(array_digest) != 71 or not array_digest.startswith("sha256:"):
+            raise IterationError("feature cache metadata array digest is invalid")
+        try:
+            int(array_digest[7:], 16)
+        except ValueError as error:
+            raise IterationError("feature cache metadata array digest is invalid") from error
+        expected_file_name = self._array_file_name(key, array_digest)
+        if metadata.get("dataFileName") != expected_file_name:
+            raise IterationError("feature cache metadata data filename is invalid")
+        path = self.root / expected_file_name
+        if not _is_under(self.root, path):
+            raise IterationError("feature cache metadata data path escapes the cache root")
+        if not path.is_file() or _is_link_or_reparse_point(path):
+            raise IterationError("feature cache metadata references a missing or linked data file")
+        maximum_file_size = int(np.prod(expected_shape)) * np.dtype(np.float32).itemsize + 65536
+        if path.stat().st_size > maximum_file_size:
+            raise IterationError("feature cache entry exceeds the bounded feature size")
+        if _immutable_file_sha256(path, description="feature cache data") != array_digest:
+            raise IterationError("feature cache data digest does not match metadata")
+        try:
+            values = np.load(path, allow_pickle=False, max_header_size=65536)
         except (OSError, ValueError) as error:
             raise IterationError(f"feature cache entry is unreadable: {path}") from error
-        if not np.all(np.isfinite(values)):
-            raise IterationError(f"feature cache entry is non-finite: {path}")
-        return values.astype(np.float32, copy=False)
+        array = self._validate_feature_array(values, feature_kind=feature_kind)
+        return array
 
-    def put(self, key: str, values: object) -> None:
+    def put(self, key: str, values: object, *, feature_kind: str, record: dict[str, Any]) -> None:
         import numpy as np
 
-        value = np.asarray(values, dtype=np.float32)
-        temporary = self.root / f".{key}.{os.getpid()}.tmp.npy"
-        np.save(temporary, value, allow_pickle=False)
-        os.replace(temporary, self.root / f"{key}.npy")
+        self._validate_key(key)
+        value = self._validate_feature_array(values, feature_kind=feature_kind)
+        temporary = self.root / f".{key}.{os.getpid()}.{time.time_ns()}.tmp.npy"
+        try:
+            with temporary.open("wb") as output:
+                np.save(output, value, allow_pickle=False)
+                output.flush()
+                os.fsync(output.fileno())
+            array_file_sha256 = _immutable_file_sha256(temporary, description="temporary feature cache data")
+            data_file_name = self._array_file_name(key, array_file_sha256)
+            data_path = self.root / data_file_name
+            os.replace(temporary, data_path)
+            metadata = {
+                "schemaVersion": FEATURE_CACHE_ENTRY_SCHEMA_VERSION,
+                "key": key,
+                "featureKind": feature_kind,
+                "sourceSha256": record["sourceSha256"],
+                "augmentationRecipeSha256": record.get("augmentationRecipeSha256"),
+                "featureExtractor": self.feature_extractor,
+                "featureExtractorIdentitySha256": self.feature_extractor_identity_sha256,
+                "shape": list(value.shape),
+                "dtype": "float32",
+                "dataFileName": data_file_name,
+                "arrayFileSha256": array_file_sha256,
+            }
+            metadata_temporary = self.root / f".{key}.{os.getpid()}.{time.time_ns()}.tmp.json"
+            try:
+                self._write_json_fsync(metadata_temporary, metadata)
+                os.replace(metadata_temporary, self._metadata_path(key))
+            finally:
+                if metadata_temporary.exists():
+                    metadata_temporary.unlink()
+        finally:
+            if temporary.exists():
+                temporary.unlink()
 
 
 class ResearchBatchEmbedder:
@@ -361,12 +624,18 @@ def extract_features(
     batch_size: int,
     timings: dict[str, float],
     cache_counts: dict[str, int],
-) -> dict[str, object]:
-    """Verify every input, then batch extract only cache misses."""
+) -> tuple[dict[str, object], list[tuple[str, object, dict[str, Any]]]]:
+    """Verify every input, then batch extract only cache misses.
+
+    New cache values are deliberately returned to the caller rather than
+    published here.  ``run`` verifies the extractor identity again after all
+    inference before promoting these values into a reusable cache.
+    """
 
     if batch_size <= 0:
         raise IterationError("batch_size must be positive")
     features: dict[str, object] = {}
+    pending_cache_writes: list[tuple[str, object, dict[str, Any]]] = []
     misses: list[tuple[dict[str, Any], Image.Image, str | None]] = []
     verification_started = time.perf_counter()
     for record in records:
@@ -375,7 +644,9 @@ def extract_features(
             raise IterationError("feature input caseId is duplicated")
         cache_key = None if cache is None else cache.key_for(record, feature_kind)
         image = _load_rgb_and_verify(record)
-        cached = None if cache is None else cache.get(cache_key)
+        cache_validation_started = time.perf_counter()
+        cached = None if cache is None else cache.get(cache_key, feature_kind=feature_kind, record=record)
+        timings["cacheValidationSeconds"] += time.perf_counter() - cache_validation_started
         if cached is not None:
             features[case_id] = cached
             cache_counts["hits"] += 1
@@ -392,9 +663,9 @@ def extract_features(
             raise RuntimeError("DINO feature batch returned an unexpected count")
         for (record, _, cache_key), values in zip(batch, extracted, strict=True):
             if cache is not None and cache_key is not None:
-                cache.put(cache_key, values)
+                pending_cache_writes.append((cache_key, values, record))
             features[str(record["caseId"])] = values
-    return features
+    return features, pending_cache_writes
 
 
 def image_auroc(labels: list[bool], scores: list[float]) -> float | None:
@@ -760,12 +1031,38 @@ def run(
         raise IterationError("algorithm must be global-knn or patch-knn")
     started = time.perf_counter()
     manifest, categories, augmentation = build_iteration_inputs(manifest_path, augmentation_manifest_path)
-    model_weights_sha256 = sha256_file(model_weights)
-    source_sha256 = sha256_file(Path(__file__))
-    cache = None if feature_cache_path is None else FeatureCache(
-        feature_cache_path, model_weights_sha256=model_weights_sha256, source_sha256=source_sha256
+    timings = {
+        "provenanceSeconds": 0.0,
+        "inputVerificationSeconds": 0.0,
+        "cacheValidationSeconds": 0.0,
+        "cacheWriteSeconds": 0.0,
+        "featureInferenceSeconds": 0.0,
+        "scoringSeconds": 0.0,
+    }
+    provenance_started = time.perf_counter()
+    model_weights_sha256 = _immutable_file_sha256(model_weights, description="model weights")
+    extractor_identity = feature_extractor_identity(
+        model_repo=model_repo,
+        model_weights_sha256=model_weights_sha256,
+        device=device,
     )
+    extractor_identity_sha256 = canonical_json_sha256(extractor_identity)
+    cache = None if feature_cache_path is None else FeatureCache(
+        feature_cache_path,
+        feature_extractor=extractor_identity,
+        feature_extractor_identity_sha256=extractor_identity_sha256,
+    )
+    timings["provenanceSeconds"] += time.perf_counter() - provenance_started
     embedder = ResearchBatchEmbedder(model_repo=model_repo, model_weights=model_weights, device=device)
+    provenance_started = time.perf_counter()
+    loaded_identity = feature_extractor_identity(
+        model_repo=model_repo,
+        model_weights_sha256=_immutable_file_sha256(model_weights, description="model weights"),
+        device=device,
+    )
+    timings["provenanceSeconds"] += time.perf_counter() - provenance_started
+    if loaded_identity != extractor_identity:
+        raise IterationError("feature extractor inputs changed while the model was loading")
     feature_kind = "global" if algorithm == "global-knn" else "patch"
     all_records_by_case: dict[str, dict[str, Any]] = {}
     for category_records in categories.values():
@@ -777,9 +1074,8 @@ def run(
                 raise IterationError("iteration input caseId is duplicated")
             all_records_by_case[case_id] = record
     feature_records = [all_records_by_case[case_id] for case_id in sorted(all_records_by_case)]
-    timings = {"inputVerificationSeconds": 0.0, "featureInferenceSeconds": 0.0, "scoringSeconds": 0.0}
     cache_counts = {"hits": 0, "misses": 0}
-    features = extract_features(
+    features, pending_cache_writes = extract_features(
         feature_records,
         feature_kind=feature_kind,
         embedder=embedder,
@@ -788,6 +1084,20 @@ def run(
         timings=timings,
         cache_counts=cache_counts,
     )
+    provenance_started = time.perf_counter()
+    completed_identity = feature_extractor_identity(
+        model_repo=model_repo,
+        model_weights_sha256=_immutable_file_sha256(model_weights, description="model weights"),
+        device=device,
+    )
+    timings["provenanceSeconds"] += time.perf_counter() - provenance_started
+    if completed_identity != extractor_identity:
+        raise IterationError("feature extractor inputs changed while features were extracted")
+    if cache is not None:
+        cache_write_started = time.perf_counter()
+        for cache_key, values, record in pending_cache_writes:
+            cache.put(cache_key, values, feature_kind=feature_kind, record=record)
+        timings["cacheWriteSeconds"] += time.perf_counter() - cache_write_started
 
     category_reports: dict[str, Any] = {}
     score_records: list[dict[str, Any]] = []
@@ -877,6 +1187,7 @@ def run(
             "topKMostAnomalousPatches": top_k_patches,
             "prototypeBlockSize": prototype_block_size,
         }
+    algorithm_report["modelRepositorySha256"] = extractor_identity["modelRepositorySha256"]
     evidence = normal_only_evidence(feature_records, score_records, calibration_records)
     configuration = candidate_configuration(algorithm_report, batch_size=batch_size)
     report = {
@@ -895,14 +1206,17 @@ def run(
         "inputManifestDeclaredSha256": manifest.get("manifestSha256"),
         "augmentation": augmentation,
         "algorithm": algorithm_report,
+        "featureExtractor": extractor_identity,
+        "featureExtractorIdentitySha256": extractor_identity_sha256,
         "candidateConfiguration": configuration,
         "candidateConfigurationSha256": canonical_json_sha256(configuration),
         "execution": {
             "batchSize": batch_size,
             "featureCache": None if cache is None else str(feature_cache_path),
+            "featureCacheSchemaVersion": FEATURE_CACHE_SCHEMA_VERSION,
             "featureCacheHits": cache_counts["hits"],
             "featureCacheMisses": cache_counts["misses"],
-            "iterationToolSha256": source_sha256,
+            "iterationToolSha256": extractor_identity["iterationToolSha256"],
             "phaseTimingsSeconds": {name: round(value, 6) for name, value in timings.items()},
             "python": sys.version,
             "platform": platform.platform(),

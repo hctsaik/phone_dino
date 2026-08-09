@@ -60,6 +60,41 @@ def _candidate_configuration(max_prototypes: int) -> dict[str, object]:
     }
 
 
+def _feature_extractor_identity() -> dict[str, object]:
+    return {
+        "schemaVersion": "phone-dino.mvtec-ad-feature-extractor/1.0",
+        "modelWeightsSha256": _digest("e"),
+        "modelRepositorySha256": _digest("9"),
+        "preprocessingId": "DINO_TEST_PREPROCESSING",
+        "preprocessing": {
+            "colorSpace": "RGB",
+            "resizeShortEdge": 256,
+            "centerCropWidth": 224,
+            "centerCropHeight": 224,
+            "resizeAntialias": True,
+            "normalizeMean": [0.485, 0.456, 0.406],
+            "normalizeStd": [0.229, 0.224, 0.225],
+        },
+        "modelEntrypoint": "dinov2_vits14",
+        "device": "cpu",
+        "iterationToolSha256": _digest("f"),
+        "productionModuleSha256": _digest("a"),
+        "enginesModuleSha256": _digest("b"),
+        "mvtecResearchModuleSha256": _digest("c"),
+        "pythonVersion": "3.11.0",
+        "numpyVersion": "2.0.0",
+        "torchVersion": "2.0.0",
+        "torchvisionVersion": "0.0.0",
+        "pillowVersion": "10.0.0",
+        "torchThreadCount": 1,
+        "torchBackend": {
+            "deterministicAlgorithmsEnabled": False,
+            "mkldnnAvailable": True,
+            "mkldnnEnabled": True,
+        },
+    }
+
+
 def _report_document(
     *,
     original_score: float,
@@ -114,7 +149,7 @@ def _report_document(
         key=lambda record: str(record["caseId"]),
     )
     document: dict[str, object] = {
-        "schemaVersion": "phone-dino.mvtec-ad-iteration-report/1.2",
+        "schemaVersion": "phone-dino.mvtec-ad-iteration-report/1.3",
         "authoritative": False,
         "productionAuthorized": False,
         "disclaimer": "Offline MVTec research fixture only.",
@@ -130,17 +165,18 @@ def _report_document(
         },
         "algorithm": {
             "id": "DINOV2_PATCH_NEAREST_NORMAL_COSINE_TOPK_V1", "modelRepository": "C:/outside/dinov2",
-            "modelWeights": "C:/outside/weights.pth", "modelWeightsSha256": _digest("e"),
+            "modelRepositorySha256": _digest("9"), "modelWeights": "C:/outside/weights.pth", "modelWeightsSha256": _digest("e"),
             "preprocessingId": "DINO_TEST_PREPROCESSING", "device": "cpu",
             "memoryBankSelection": "DETERMINISTIC_EVENLY_SPACED_PATCH_SUBSET_AFTER_STABLE_PARENT_SORT",
             "maxPrototypePatches": max_prototypes, "topKMostAnomalousPatches": 5, "prototypeBlockSize": 256,
         },
         "execution": {
             "batchSize": 4, "featureCache": "C:/outside/cache", "featureCacheHits": 0, "featureCacheMisses": 6,
-            "iterationToolSha256": _digest("f"),
+            "iterationToolSha256": _digest("f"), "featureCacheSchemaVersion": "phone-dino.mvtec-ad-feature-cache/1.1",
             "phaseTimingsSeconds": {
-                "inputVerificationSeconds": 0.1, "featureInferenceSeconds": 0.2, "scoringSeconds": 0.3,
-                "pixelMetricsSeconds": 0.0, "totalElapsedSeconds": 0.6,
+                "provenanceSeconds": 0.1, "inputVerificationSeconds": 0.1, "cacheValidationSeconds": 0.1,
+                "cacheWriteSeconds": 0.1, "featureInferenceSeconds": 0.2, "scoringSeconds": 0.3,
+                "pixelMetricsSeconds": 0.0, "totalElapsedSeconds": 0.9,
             },
             "python": "3.11", "platform": "test", "numpyVersion": "2.0", "torchVersion": "2.0", "torchThreadCount": 1,
         },
@@ -148,6 +184,8 @@ def _report_document(
         "scores": [original],
         "pixelLocalization": None,
     }
+    document["featureExtractor"] = _feature_extractor_identity()
+    document["featureExtractorIdentitySha256"] = tool.canonical_json_sha256(document["featureExtractor"])
     document["candidateConfiguration"] = _candidate_configuration(max_prototypes)
     document["candidateConfigurationSha256"] = tool.canonical_json_sha256(document["candidateConfiguration"])
     document["normalOnlyEvidence"] = _normal_evidence(tool, feature_inputs, calibration_scores)
@@ -201,7 +239,7 @@ def _write_contract(path: Path, *, reference_path: Path, candidate_configuration
     reference = json.loads(reference_path.read_text(encoding="utf-8"))
     evidence = reference["normalOnlyEvidence"]
     document: dict[str, object] = {
-        "schemaVersion": "phone-dino.mvtec-ad-normal-selection-contract/1.0",
+        "schemaVersion": "phone-dino.mvtec-ad-normal-selection-contract/1.1",
         "authoritative": False, "productionAuthorized": False, "purpose": "OFFLINE_MVTEC_NORMAL_ONLY_CONFIGURATION_LOCK",
         "inputManifestDeclaredSha256": _digest("a"), "inputManifestFileSha256": _digest("b"),
         "candidates": [
@@ -210,7 +248,9 @@ def _write_contract(path: Path, *, reference_path: Path, candidate_configuration
         ],
         "candidateUniverse": {
             "algorithmId": "DINOV2_PATCH_NEAREST_NORMAL_COSINE_TOPK_V1", "modelWeightsSha256": _digest("e"),
+            "modelRepositorySha256": _digest("9"),
             "preprocessingId": "DINO_TEST_PREPROCESSING", "device": "cpu", "iterationToolSha256": _digest("f"),
+            "featureExtractorIdentitySha256": reference["featureExtractorIdentitySha256"],
             "categories": ["capsule"], "normalInputIdentitySha256": evidence["normalInputIdentitySha256"],
             "calibrationInputIdentitySha256": evidence["calibrationInputIdentitySha256"],
             "originalTuningInputIdentitySha256": evidence["originalTuningInputIdentitySha256"],
@@ -297,6 +337,22 @@ def test_normal_selection_rejects_out_of_range_score_and_duplicate_report_path(t
     assert "cosine-distance range" in evaluation["rejectionReasons"][0]
     with pytest.raises(tool.SelectionError, match="distinct report path"):
         tool.run_selection(contract, {"reference": reference, "candidate": reference}, tmp_path / "duplicate.json")
+
+
+def test_normal_selection_rejects_changed_feature_extractor_identity(tmp_path: Path) -> None:
+    tool = _tool_module()
+    reference = _write_report(tmp_path / "reference.json", original_score=0.10, augmented_scores=[0.15, 0.14], max_prototypes=1024)
+    changed = _report_document(original_score=0.10, augmented_scores=[0.12, 0.11], max_prototypes=2048)
+    changed["featureExtractor"]["productionModuleSha256"] = _digest("8")
+    changed["featureExtractorIdentitySha256"] = tool.canonical_json_sha256(changed["featureExtractor"])
+    changed_path = tmp_path / "changed-extractor.json"
+    changed_path.write_text(json.dumps(changed, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    configurations = {"reference": _candidate_configuration(1024), "candidate": _candidate_configuration(2048)}
+    contract = _write_contract(tmp_path / "contract.json", reference_path=reference, candidate_configurations=configurations)
+    result = tool.run_selection(contract, {"reference": reference, "candidate": changed_path}, tmp_path / "selection.json")
+    evaluation = next(item for item in result["candidateEvaluations"] if item["id"] == "candidate")
+    assert evaluation["state"] == "REJECTED_INVALID_REPORT"
+    assert "feature extractor identity does not match the contract" in evaluation["rejectionReasons"][0]
 
 
 def test_normal_selection_rejects_hidden_blind_payload_and_inconsistent_membership_counts(tmp_path: Path) -> None:

@@ -25,9 +25,11 @@ if str(REPOSITORY_ROOT / "src") not in sys.path:
 from phone_dino.mvtec_research import canonical_json_sha256, sha256_file
 
 
-CONTRACT_SCHEMA_VERSION = "phone-dino.mvtec-ad-normal-selection-contract/1.0"
-ITERATION_REPORT_SCHEMA_VERSION = "phone-dino.mvtec-ad-iteration-report/1.2"
-SELECTION_SCHEMA_VERSION = "phone-dino.mvtec-ad-normal-selection/1.0"
+CONTRACT_SCHEMA_VERSION = "phone-dino.mvtec-ad-normal-selection-contract/1.1"
+ITERATION_REPORT_SCHEMA_VERSION = "phone-dino.mvtec-ad-iteration-report/1.3"
+SELECTION_SCHEMA_VERSION = "phone-dino.mvtec-ad-normal-selection/1.1"
+FEATURE_CACHE_SCHEMA_VERSION = "phone-dino.mvtec-ad-feature-cache/1.1"
+FEATURE_EXTRACTOR_SCHEMA_VERSION = "phone-dino.mvtec-ad-feature-extractor/1.0"
 SELECTION_PURPOSE = "OFFLINE_MVTEC_NORMAL_ONLY_CONFIGURATION_LOCK"
 NORMAL_OBJECTIVE = [
     "MINIMIZE_WORST_PAIRED_AUGMENTED_SCORE_DELTA_P95",
@@ -76,24 +78,60 @@ NORMAL_ONLY_EVIDENCE_FIELDS = {
     "originalTuningInputIdentitySha256",
 }
 BLIND_REPORTING_FIELDS = {"state", "blindSourcePolicy", "reason"}
+FEATURE_EXTRACTOR_FIELDS = {
+    "schemaVersion",
+    "modelWeightsSha256",
+    "modelRepositorySha256",
+    "preprocessingId",
+    "preprocessing",
+    "modelEntrypoint",
+    "device",
+    "iterationToolSha256",
+    "productionModuleSha256",
+    "enginesModuleSha256",
+    "mvtecResearchModuleSha256",
+    "pythonVersion",
+    "numpyVersion",
+    "torchVersion",
+    "torchvisionVersion",
+    "pillowVersion",
+    "torchThreadCount",
+    "torchBackend",
+}
+FEATURE_EXTRACTOR_PREPROCESSING_FIELDS = {
+    "colorSpace",
+    "resizeShortEdge",
+    "centerCropWidth",
+    "centerCropHeight",
+    "resizeAntialias",
+    "normalizeMean",
+    "normalizeStd",
+}
+FEATURE_EXTRACTOR_TORCH_BACKEND_FIELDS = {
+    "deterministicAlgorithmsEnabled",
+    "mkldnnAvailable",
+    "mkldnnEnabled",
+}
 ITERATION_REPORT_FIELDS = {
     "schemaVersion", "authoritative", "productionAuthorized", "disclaimer", "selectionProtocol", "blindReporting",
     "inputManifest", "inputManifestFileSha256", "inputManifestDeclaredSha256", "augmentation", "algorithm",
-    "candidateConfiguration", "candidateConfigurationSha256", "execution", "categories", "normalOnlyEvidence",
+    "featureExtractor", "featureExtractorIdentitySha256", "candidateConfiguration", "candidateConfigurationSha256",
+    "execution", "categories", "normalOnlyEvidence",
     "calibrationScores", "scores", "pixelLocalization",
 }
 ALGORITHM_BASE_FIELDS = {
-    "id", "modelRepository", "modelWeights", "modelWeightsSha256", "preprocessingId", "device",
+    "id", "modelRepository", "modelRepositorySha256", "modelWeights", "modelWeightsSha256", "preprocessingId", "device",
 }
 PATCH_ALGORITHM_FIELDS = {
     "memoryBankSelection", "maxPrototypePatches", "topKMostAnomalousPatches", "prototypeBlockSize",
 }
 EXECUTION_FIELDS = {
     "batchSize", "featureCache", "featureCacheHits", "featureCacheMisses", "iterationToolSha256",
-    "phaseTimingsSeconds", "python", "platform", "numpyVersion", "torchVersion", "torchThreadCount",
+    "featureCacheSchemaVersion", "phaseTimingsSeconds", "python", "platform", "numpyVersion", "torchVersion", "torchThreadCount",
 }
 TIMING_FIELDS = {
-    "inputVerificationSeconds", "featureInferenceSeconds", "scoringSeconds", "pixelMetricsSeconds", "totalElapsedSeconds",
+    "provenanceSeconds", "inputVerificationSeconds", "cacheValidationSeconds", "cacheWriteSeconds", "featureInferenceSeconds",
+    "scoringSeconds", "pixelMetricsSeconds", "totalElapsedSeconds",
 }
 CATEGORY_COMMON_FIELDS = {
     "blindCases", "blindNominalCases", "blindAnomalyCases", "imageAuRoc", "thresholdFromNominalTuning",
@@ -236,15 +274,18 @@ def _load_contract_with_digest(path: Path) -> tuple[dict[str, Any], str]:
             raise SelectionError("candidateConfiguration must not be empty")
     universe = _require_mapping(document, "candidateUniverse")
     _require_exact_fields(universe, {
-        "algorithmId", "modelWeightsSha256", "preprocessingId", "device", "iterationToolSha256",
+        "algorithmId", "modelWeightsSha256", "modelRepositorySha256", "preprocessingId", "device", "iterationToolSha256",
+        "featureExtractorIdentitySha256",
         "categories", "normalInputIdentitySha256", "calibrationInputIdentitySha256",
         "originalTuningInputIdentitySha256", "augmentationManifestSha256", "recipeSha256",
     }, name="candidateUniverse")
     _require_string(universe, "algorithmId")
     _require_sha256(universe, "modelWeightsSha256")
+    _require_sha256(universe, "modelRepositorySha256")
     _require_string(universe, "preprocessingId")
     _require_string(universe, "device")
     _require_sha256(universe, "iterationToolSha256")
+    _require_sha256(universe, "featureExtractorIdentitySha256")
     categories = _unique_string_list(universe.get("categories"), name="candidateUniverse.categories")
     if categories != sorted(categories):
         raise SelectionError("candidateUniverse.categories must be sorted")
@@ -509,6 +550,7 @@ def _report_candidate_configuration(algorithm: dict[str, Any], execution: dict[s
     )
     _require_exact_fields(algorithm, expected_algorithm_fields, name="algorithm")
     _require_string(algorithm, "modelRepository")
+    _require_sha256(algorithm, "modelRepositorySha256")
     _require_string(algorithm, "modelWeights")
     _require_sha256(algorithm, "modelWeightsSha256")
     _require_string(algorithm, "preprocessingId")
@@ -518,6 +560,8 @@ def _report_candidate_configuration(algorithm: dict[str, Any], execution: dict[s
     if batch_size <= 0:
         raise SelectionError("execution.batchSize must be positive")
     _require_sha256(execution, "iterationToolSha256")
+    if execution.get("featureCacheSchemaVersion") != FEATURE_CACHE_SCHEMA_VERSION:
+        raise SelectionError("execution feature cache schema is unsupported")
     for name in ("featureCacheHits", "featureCacheMisses", "torchThreadCount"):
         _require_nonnegative_int(execution, name)
     if execution.get("featureCache") is not None and not isinstance(execution.get("featureCache"), str):
@@ -539,6 +583,71 @@ def _report_candidate_configuration(algorithm: dict[str, Any], execution: dict[s
             configuration[name] = value
         configuration["memoryBankSelection"] = algorithm["memoryBankSelection"]
     return configuration
+
+
+def _report_feature_extractor_identity(
+    report: dict[str, Any],
+    algorithm: dict[str, Any],
+    execution: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate the exact local implementation and dependency identity behind features."""
+
+    identity = _require_mapping(report, "featureExtractor")
+    _require_exact_fields(identity, FEATURE_EXTRACTOR_FIELDS, name="featureExtractor")
+    if identity.get("schemaVersion") != FEATURE_EXTRACTOR_SCHEMA_VERSION:
+        raise SelectionError("featureExtractor has an unsupported schema")
+    for name in (
+        "modelWeightsSha256",
+        "modelRepositorySha256",
+        "iterationToolSha256",
+        "productionModuleSha256",
+        "enginesModuleSha256",
+        "mvtecResearchModuleSha256",
+    ):
+        _require_sha256(identity, name)
+    for name in (
+        "preprocessingId",
+        "modelEntrypoint",
+        "device",
+        "pythonVersion",
+        "numpyVersion",
+        "torchVersion",
+        "torchvisionVersion",
+        "pillowVersion",
+    ):
+        _require_string(identity, name)
+    if _require_nonnegative_int(identity, "torchThreadCount") <= 0:
+        raise SelectionError("featureExtractor torchThreadCount must be positive")
+    preprocessing = _require_mapping(identity, "preprocessing")
+    _require_exact_fields(preprocessing, FEATURE_EXTRACTOR_PREPROCESSING_FIELDS, name="featureExtractor.preprocessing")
+    if preprocessing.get("colorSpace") != "RGB" or preprocessing.get("resizeAntialias") is not True:
+        raise SelectionError("featureExtractor preprocessing is not the supported RGB antialiased transform")
+    for name in ("resizeShortEdge", "centerCropWidth", "centerCropHeight"):
+        if _require_nonnegative_int(preprocessing, name) <= 0:
+            raise SelectionError(f"featureExtractor preprocessing {name} must be positive")
+    for name in ("normalizeMean", "normalizeStd"):
+        values = preprocessing.get(name)
+        if not isinstance(values, list) or len(values) != 3:
+            raise SelectionError(f"featureExtractor preprocessing {name} must be a three-channel array")
+        for value in values:
+            if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
+                raise SelectionError(f"featureExtractor preprocessing {name} must be finite")
+    backend = _require_mapping(identity, "torchBackend")
+    _require_exact_fields(backend, FEATURE_EXTRACTOR_TORCH_BACKEND_FIELDS, name="featureExtractor.torchBackend")
+    if any(not isinstance(backend.get(name), bool) for name in FEATURE_EXTRACTOR_TORCH_BACKEND_FIELDS):
+        raise SelectionError("featureExtractor torch backend flags must be boolean")
+    for identity_name, report_name, report_document in (
+        ("modelWeightsSha256", "modelWeightsSha256", algorithm),
+        ("modelRepositorySha256", "modelRepositorySha256", algorithm),
+        ("preprocessingId", "preprocessingId", algorithm),
+        ("device", "device", algorithm),
+        ("iterationToolSha256", "iterationToolSha256", execution),
+    ):
+        if identity[identity_name] != report_document[report_name]:
+            raise SelectionError(f"featureExtractor {identity_name} does not match the report")
+    if report.get("featureExtractorIdentitySha256") != canonical_json_sha256(identity):
+        raise SelectionError("featureExtractor identity digest does not match")
+    return identity
 
 
 def validate_candidate_report(
@@ -594,6 +703,7 @@ def validate_candidate_report(
     algorithm = _require_mapping(report, "algorithm")
     execution = _require_mapping(report, "execution")
     actual_configuration = _report_candidate_configuration(algorithm, execution)
+    _report_feature_extractor_identity(report, algorithm, execution)
     reported_configuration = _require_mapping(report, "candidateConfiguration")
     if reported_configuration != actual_configuration:
         raise SelectionError("candidate report configuration does not match its algorithm and execution fields")
@@ -604,6 +714,7 @@ def validate_candidate_report(
     for report_name, contract_name in (
         ("id", "algorithmId"),
         ("modelWeightsSha256", "modelWeightsSha256"),
+        ("modelRepositorySha256", "modelRepositorySha256"),
         ("preprocessingId", "preprocessingId"),
         ("device", "device"),
     ):
@@ -611,6 +722,8 @@ def validate_candidate_report(
             raise SelectionError(f"candidate report algorithm {report_name} does not match the contract")
     if execution.get("iterationToolSha256") != universe["iterationToolSha256"]:
         raise SelectionError("candidate report iteration tool identity does not match the contract")
+    if report.get("featureExtractorIdentitySha256") != universe["featureExtractorIdentitySha256"]:
+        raise SelectionError("candidate report feature extractor identity does not match the contract")
 
     categories = _require_mapping(report, "categories")
     expected_categories = _unique_string_list(universe.get("categories"), name="candidateUniverse.categories")
