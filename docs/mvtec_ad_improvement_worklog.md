@@ -409,6 +409,32 @@ that corrupt tuning, selection, confirmation, and reserve files are not
 opened. The implementation is ready to generate a new external V1/R4 package;
 no external derivative has been created at this point.
 
+## Fresh FIT camera augmentation V1/R4 package (2026-08-09)
+
+The new external-only package
+`fresh_normal_holdout_v1\fresh_fit_camera_v1_r4` has now been generated from
+the frozen fresh holdout. It contains exactly 576 children: 4 variants for each
+of 144 FIT parents, or 192 children per category (`capsule`, `metal_nut`, and
+`tile`). Every record is `FIT` parent / `NOMINAL` / `good`; raw tuning,
+selection, confirmation, reserve, blind, anomaly, and mask inputs were not
+opened.
+
+| Binding | Digest |
+| --- | --- |
+| Package declared digest | `sha256:aa7d976a430c01b20afa2dbd0a3af94bca2cd7adad42273df069749bb15e80ba` |
+| Package file digest | `sha256:234c1a2f9a2d79127217bfab999b0ef5a48abf6fd1124365329003a5b67f5895` |
+| Fresh holdout declared digest | `sha256:51a359f5d579a99321dc33687fecc6d9a8db92fb7f921960bbb6898c23e2e74e` |
+| Fresh development identity | `sha256:1c19aca07d0efe4552921f1afc830962bbdff9629b91359c259bd23b14176a18` |
+| FIT-parent identity | `sha256:8f57a1e69098313776a70fa70fbb941bcbb61185490193618a6f809d72c16418` |
+| Closed recipe file | `sha256:d0c0575bff44feafeb8364fc32e5eebe30335291d0aff7056abb0e25b22869a7` |
+
+The post-generation validator rehashed all FIT parents and package children,
+verified each complete 4:2:0/Q95 JPEG coding profile, regenerated every child
+from its parent/parameters, and matched all 576 byte strings exactly. This is
+only reproducibility evidence for a generic normal FIT augmentation package;
+it is not a threshold change, candidate selection, anomaly-detection result,
+or production/physical qualification.
+
 ## Physical readiness audit (2026-08-09)
 
 The offline research result was not used as a substitute for a physical-device
