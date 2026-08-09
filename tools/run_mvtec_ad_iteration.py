@@ -38,7 +38,7 @@ from phone_dino.mvtec_research import (
 from phone_dino.production import DINO_INPUT_SIZE, DINO_RESIZE_SHORT_EDGE, DinoV2Embedder
 
 
-ITERATION_SCHEMA_VERSION = "phone-dino.mvtec-ad-iteration-report/1.3"
+ITERATION_SCHEMA_VERSION = "phone-dino.mvtec-ad-iteration-report/1.4"
 FEATURE_CACHE_SCHEMA_VERSION = "phone-dino.mvtec-ad-feature-cache/1.1"
 FEATURE_CACHE_ENTRY_SCHEMA_VERSION = "phone-dino.mvtec-ad-feature-cache-entry/1.0"
 FEATURE_EXTRACTOR_SCHEMA_VERSION = "phone-dino.mvtec-ad-feature-extractor/1.0"
@@ -263,6 +263,7 @@ def load_frozen_records(manifest_path: Path) -> tuple[dict[str, Any], list[dict[
             raise IterationError("frozen MVTec image is missing or escapes the dataset root")
         record["imagePath"] = image_path
         record["isAugmentation"] = False
+        record["variantId"] = None
         if kind == "ANOMALY":
             mask_path = _safe_relative_path(record.get("maskRelativePath"), name="maskRelativePath")
             record["maskSha256"] = _require_sha256(record, "maskSha256")
@@ -278,7 +279,8 @@ def input_sort_key(record: dict[str, Any]) -> tuple[str, int, str]:
     """Stabilize generated and original parents before prototype selection."""
 
     parent_case_id = str(record.get("parentCaseId", record["caseId"]))
-    variant_id = int(record.get("variantId", 0))
+    raw_variant_id = record.get("variantId")
+    variant_id = 0 if raw_variant_id is None else int(raw_variant_id)
     return parent_case_id, variant_id, str(record["caseId"])
 
 
@@ -315,6 +317,7 @@ def build_iteration_inputs(
             "augmentationManifestPath": str(augmentation_manifest_path),
             "augmentationManifestSha256": augmentation_document["augmentationManifestSha256"],
             "recipeSha256": augmentation_document["recipeSha256"],
+            "variantsPerParent": augmentation_document["variantsPerParent"],
             "derivedRecordCount": len(augmented),
         }
 
@@ -877,6 +880,7 @@ def _score_record(record: dict[str, Any], components: dict[str, Any] | None = No
         "defect": record.get("defect"),
         "sourceSha256": record["sourceSha256"],
         "isAugmentation": bool(record.get("isAugmentation", False)),
+        "variantId": record.get("variantId"),
         "score": float(record["score"]),
     }
     if record.get("isAugmentation", False):
@@ -922,6 +926,7 @@ def input_identity_record(record: dict[str, Any]) -> dict[str, Any]:
         "kind": record["kind"],
         "sourceSha256": record["sourceSha256"],
         "isAugmentation": bool(record.get("isAugmentation", False)),
+        "variantId": record.get("variantId"),
         "parentCaseId": record.get("parentCaseId"),
         "parentSourceSha256": record.get("parentSourceSha256"),
         "augmentationRecipeSha256": record.get("augmentationRecipeSha256"),

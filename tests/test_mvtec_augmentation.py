@@ -190,6 +190,21 @@ def test_v3_manifest_requires_full_coverage_and_rederived_parameters(tmp_path: P
         load_validated_normal_augmentations(regenerated_output, manifest_path)
 
 
+def test_v3_multi_seed_manifest_covers_every_normal_parent_and_variant(tmp_path: Path) -> None:
+    manifest_path = _frozen_manifest(tmp_path)
+    output_dir = tmp_path / "outside-v3-r4"
+    generated = generate_normal_augmentations(
+        manifest_path, RECIPE_V3_PATH, output_dir, variants_per_parent=4, repository_root=tmp_path / "repo"
+    )
+    assert generated["variantsPerParent"] == 4
+    by_parent: dict[str, set[int]] = {}
+    for record in generated["records"]:
+        by_parent.setdefault(str(record["parentCaseId"]), set()).add(int(record["variantId"]))
+    assert by_parent == {"case/fit/001": {1, 2, 3, 4}, "case/tuning/001": {1, 2, 3, 4}}
+    _, validated = load_validated_normal_augmentations(output_dir / "augmentation_manifest.json", manifest_path)
+    assert len(validated) == 8
+
+
 def test_v3_manifest_detects_altered_seed_anchor_and_out_of_bounds_lens_recipe(tmp_path: Path) -> None:
     manifest_path = _frozen_manifest(tmp_path)
     output_dir = tmp_path / "outside-v3"

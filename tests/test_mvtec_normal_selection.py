@@ -18,7 +18,9 @@ def _tool_module():
 
 
 def _digest(character: str) -> str:
-    return f"sha256:{character * 64}"
+    if len(character) == 1:
+        return f"sha256:{character * 64}"
+    return f"sha256:{hashlib.sha256(character.encode('utf-8')).hexdigest()}"
 
 
 def _file_sha256(path: Path) -> str:
@@ -43,6 +45,7 @@ def _identity_from_score(record: dict[str, object]) -> dict[str, object]:
         "kind": record["kind"],
         "sourceSha256": record["sourceSha256"],
         "isAugmentation": record["isAugmentation"],
+        "variantId": record.get("variantId"),
         "parentCaseId": record.get("parentCaseId"),
         "parentSourceSha256": record.get("parentSourceSha256"),
         "augmentationRecipeSha256": record.get("augmentationRecipeSha256"),
@@ -111,6 +114,7 @@ def _report_document(
         "defect": "good",
         "sourceSha256": _digest("1"),
         "isAugmentation": False,
+        "variantId": None,
         "score": original_score,
     }
     augmented = [
@@ -122,6 +126,7 @@ def _report_document(
             "defect": "good",
             "sourceSha256": _digest(str(index + 1)),
             "isAugmentation": True,
+            "variantId": index,
             "parentCaseId": original["caseId"],
             "parentSourceSha256": original["sourceSha256"],
             "augmentationRecipeSha256": _digest("d"),
@@ -132,12 +137,14 @@ def _report_document(
     fit_original = {
         "caseId": "capsule/fit/001", "category": "capsule", "role": "FIT", "kind": "NOMINAL",
         "sourceSha256": _digest("7"), "isAugmentation": False,
+        "variantId": None,
         "parentCaseId": None, "parentSourceSha256": None, "augmentationRecipeSha256": None,
     }
     fit_augmented = [
         {
             "caseId": f"capsule/fit/001/camera-augmentation/{index:02d}", "category": "capsule", "role": "FIT", "kind": "NOMINAL",
             "sourceSha256": _digest(str(index + 7)), "isAugmentation": True,
+            "variantId": index,
             "parentCaseId": fit_original["caseId"], "parentSourceSha256": fit_original["sourceSha256"],
             "augmentationRecipeSha256": _digest("d"),
         }
@@ -149,7 +156,7 @@ def _report_document(
         key=lambda record: str(record["caseId"]),
     )
     document: dict[str, object] = {
-        "schemaVersion": "phone-dino.mvtec-ad-iteration-report/1.3",
+        "schemaVersion": "phone-dino.mvtec-ad-iteration-report/1.4",
         "authoritative": False,
         "productionAuthorized": False,
         "disclaimer": "Offline MVTec research fixture only.",
@@ -161,7 +168,8 @@ def _report_document(
         "augmentation": {
             "state": "NORMAL_FIT_AND_TUNING_ONLY", "blindPolicy": "BLIND_ORIGINAL_ONLY", "blindAugmentedCount": 0,
             "augmentationManifestPath": "C:/outside/augmentation_manifest.json", "augmentationManifestSha256": _digest("c"),
-            "recipeSha256": _digest("d"), "derivedRecordCount": len(augmented) + len(fit_augmented),
+            "recipeSha256": _digest("d"), "variantsPerParent": len(augmented_scores),
+            "derivedRecordCount": len(augmented) + len(fit_augmented),
         },
         "algorithm": {
             "id": "DINOV2_PATCH_NEAREST_NORMAL_COSINE_TOPK_V1", "modelRepository": "C:/outside/dinov2",
@@ -234,12 +242,19 @@ def _write_report(path: Path, **kwargs: object) -> Path:
     return path
 
 
-def _write_contract(path: Path, *, reference_path: Path, candidate_configurations: dict[str, dict[str, object]], paired_cap: float = 0.1) -> Path:
+def _write_contract(
+    path: Path,
+    *,
+    reference_path: Path,
+    candidate_configurations: dict[str, dict[str, object]],
+    paired_cap: float = 0.1,
+    per_variant_paired_cap: float | None = None,
+) -> Path:
     tool = _tool_module()
     reference = json.loads(reference_path.read_text(encoding="utf-8"))
     evidence = reference["normalOnlyEvidence"]
     document: dict[str, object] = {
-        "schemaVersion": "phone-dino.mvtec-ad-normal-selection-contract/1.1",
+        "schemaVersion": "phone-dino.mvtec-ad-normal-selection-contract/1.2",
         "authoritative": False, "productionAuthorized": False, "purpose": "OFFLINE_MVTEC_NORMAL_ONLY_CONFIGURATION_LOCK",
         "inputManifestDeclaredSha256": _digest("a"), "inputManifestFileSha256": _digest("b"),
         "candidates": [
@@ -255,12 +270,21 @@ def _write_contract(path: Path, *, reference_path: Path, candidate_configuration
             "calibrationInputIdentitySha256": evidence["calibrationInputIdentitySha256"],
             "originalTuningInputIdentitySha256": evidence["originalTuningInputIdentitySha256"],
             "augmentationManifestSha256": _digest("c"), "recipeSha256": _digest("d"),
+            "augmentationVariantsPerParent": reference["augmentation"]["variantsPerParent"],
         },
         "referenceCandidate": {"id": next(iter(candidate_configurations)), "reportSha256": _file_sha256(reference_path)},
         "gate": {
             "maxThresholdIncreaseVsReference": 0.0, "maxOriginalP95IncreaseVsReference": 0.0,
             "maxAugmentedP95MinusOriginalP95": 0.1, "maxPairedAugmentedScoreDeltaP95": paired_cap,
             "maxPairedAugmentedScoreDeltaMax": paired_cap,
+            "perVariantPairedDeltaGates": [
+                {
+                    "variantId": variant_id,
+                    "maxPairedAugmentedScoreDeltaP95": paired_cap if per_variant_paired_cap is None else per_variant_paired_cap,
+                    "maxPairedAugmentedScoreDeltaMax": paired_cap if per_variant_paired_cap is None else per_variant_paired_cap,
+                }
+                for variant_id in range(1, int(reference["augmentation"]["variantsPerParent"]) + 1)
+            ],
         },
         "selection": {"objective": tool.NORMAL_OBJECTIVE},
     }
@@ -320,7 +344,31 @@ def test_normal_selection_rejects_calibration_subset_even_when_report_is_self_co
     result = tool.run_selection(contract, {"reference": reference, "subset": subset_path}, tmp_path / "selection.json")
     evaluation = next(item for item in result["candidateEvaluations"] if item["id"] == "subset")
     assert evaluation["state"] == "REJECTED_INVALID_REPORT"
-    assert "calibration identity" in evaluation["rejectionReasons"][0]
+    assert "calibration membership does not match tuning feature membership" in evaluation["rejectionReasons"][0]
+
+
+def test_normal_selection_rejects_calibration_recipe_mismatched_from_feature_membership(tmp_path: Path) -> None:
+    tool = _tool_module()
+    mismatched = _report_document(original_score=0.10, augmented_scores=[0.15, 0.14], max_prototypes=1024)
+    for record in mismatched["calibrationScores"]:
+        if record["isAugmentation"]:
+            record["augmentationRecipeSha256"] = _digest("e")
+    mismatched["normalOnlyEvidence"] = _normal_evidence(
+        tool, mismatched["normalOnlyEvidence"]["featureInputs"], mismatched["calibrationScores"]
+    )
+    mismatched_path = tmp_path / "mismatched-calibration-recipe.json"
+    mismatched_path.write_text(json.dumps(mismatched, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    contract = _write_contract(
+        tmp_path / "mismatched-calibration-recipe-contract.json",
+        reference_path=mismatched_path,
+        candidate_configurations={"reference": _candidate_configuration(1024)},
+    )
+    result = tool.run_selection(
+        contract, {"reference": mismatched_path}, tmp_path / "mismatched-calibration-recipe-selection.json"
+    )
+    evaluation = result["candidateEvaluations"][0]
+    assert evaluation["state"] == "REJECTED_INVALID_REPORT"
+    assert "calibration membership does not match tuning feature membership" in evaluation["rejectionReasons"][0]
 
 
 def test_normal_selection_rejects_out_of_range_score_and_duplicate_report_path(tmp_path: Path) -> None:
@@ -387,6 +435,109 @@ def test_normal_selection_rejects_hidden_blind_payload_and_inconsistent_membersh
     evaluation = next(item for item in result["candidateEvaluations"] if item["id"] == "candidate")
     assert evaluation["state"] == "REJECTED_INVALID_REPORT"
     assert "fitAugmentedCount does not match feature membership" in evaluation["rejectionReasons"][0]
+
+
+def test_normal_selection_rejects_missing_or_duplicate_parent_variant_coverage(tmp_path: Path) -> None:
+    tool = _tool_module()
+    configurations = {"reference": _candidate_configuration(1024)}
+
+    missing = _report_document(original_score=0.10, augmented_scores=[0.15, 0.14], max_prototypes=1024)
+    missing["augmentation"]["variantsPerParent"] = 3
+    missing_path = tmp_path / "missing-variant.json"
+    missing_path.write_text(json.dumps(missing, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    missing_contract = _write_contract(
+        tmp_path / "missing-variant-contract.json", reference_path=missing_path, candidate_configurations=configurations
+    )
+    missing_result = tool.run_selection(
+        missing_contract, {"reference": missing_path}, tmp_path / "missing-variant-selection.json"
+    )
+    missing_evaluation = missing_result["candidateEvaluations"][0]
+    assert missing_evaluation["state"] == "REJECTED_INVALID_REPORT"
+    assert "coverage does not match the frozen variant set" in missing_evaluation["rejectionReasons"][0]
+
+    duplicate = _report_document(original_score=0.10, augmented_scores=[0.15, 0.14], max_prototypes=1024)
+    for record in duplicate["calibrationScores"]:
+        if record["isAugmentation"] and record["variantId"] == 2:
+            record["variantId"] = 1
+    for record in duplicate["normalOnlyEvidence"]["featureInputs"]:
+        if record["isAugmentation"] and record["variantId"] == 2:
+            record["variantId"] = 1
+    duplicate["normalOnlyEvidence"] = _normal_evidence(
+        tool, duplicate["normalOnlyEvidence"]["featureInputs"], duplicate["calibrationScores"]
+    )
+    duplicate_path = tmp_path / "duplicate-variant.json"
+    duplicate_path.write_text(json.dumps(duplicate, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    duplicate_contract = _write_contract(
+        tmp_path / "duplicate-variant-contract.json", reference_path=duplicate_path, candidate_configurations=configurations
+    )
+    duplicate_result = tool.run_selection(
+        duplicate_contract, {"reference": duplicate_path}, tmp_path / "duplicate-variant-selection.json"
+    )
+    duplicate_evaluation = duplicate_result["candidateEvaluations"][0]
+    assert duplicate_evaluation["state"] == "REJECTED_INVALID_REPORT"
+    assert "duplicate variantId" in duplicate_evaluation["rejectionReasons"][0]
+
+    cross_role = _report_document(original_score=0.10, augmented_scores=[0.15, 0.14], max_prototypes=1024)
+    for records in (cross_role["calibrationScores"], cross_role["normalOnlyEvidence"]["featureInputs"]):
+        for record in records:
+            if record.get("caseId") == "capsule/tuning/001/camera-augmentation/01":
+                record["parentCaseId"] = "capsule/fit/001"
+                record["parentSourceSha256"] = _digest("7")
+    cross_role["normalOnlyEvidence"] = _normal_evidence(
+        tool, cross_role["normalOnlyEvidence"]["featureInputs"], cross_role["calibrationScores"]
+    )
+    cross_role_path = tmp_path / "cross-role-variant.json"
+    cross_role_path.write_text(json.dumps(cross_role, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    cross_role_contract = _write_contract(
+        tmp_path / "cross-role-variant-contract.json", reference_path=cross_role_path, candidate_configurations=configurations
+    )
+    cross_role_result = tool.run_selection(
+        cross_role_contract, {"reference": cross_role_path}, tmp_path / "cross-role-variant-selection.json"
+    )
+    cross_role_evaluation = cross_role_result["candidateEvaluations"][0]
+    assert cross_role_evaluation["state"] == "REJECTED_INVALID_REPORT"
+    assert "does not match its original parent membership" in cross_role_evaluation["rejectionReasons"][0]
+
+
+def test_normal_selection_applies_per_variant_gate_even_when_aggregate_gates_pass(tmp_path: Path) -> None:
+    tool = _tool_module()
+    reference = _write_report(
+        tmp_path / "reference.json", original_score=0.12, augmented_scores=[0.16, 0.14, 0.14, 0.14], max_prototypes=1024
+    )
+    candidate = _write_report(
+        tmp_path / "candidate.json", original_score=0.10, augmented_scores=[0.16, 0.11, 0.11, 0.11], max_prototypes=2048
+    )
+    configurations = {"reference": _candidate_configuration(1024), "candidate": _candidate_configuration(2048)}
+    contract = _write_contract(
+        tmp_path / "contract.json",
+        reference_path=reference,
+        candidate_configurations=configurations,
+        paired_cap=0.1,
+        per_variant_paired_cap=0.05,
+    )
+    result = tool.run_selection(contract, {"reference": reference, "candidate": candidate}, tmp_path / "selection.json")
+    evaluation = next(item for item in result["candidateEvaluations"] if item["id"] == "candidate")
+    assert evaluation["state"] == "REJECTED_GATE"
+    assert evaluation["rejectionReasons"] == [
+        "capsule.variant1.maxPairedAugmentedScoreDeltaP95=0.06 exceeds 0.05",
+        "capsule.variant1.maxPairedAugmentedScoreDeltaMax=0.06 exceeds 0.05",
+    ]
+
+
+def test_normal_selection_contract_requires_an_ordered_gate_for_every_variant(tmp_path: Path) -> None:
+    tool = _tool_module()
+    reference = _write_report(
+        tmp_path / "reference.json", original_score=0.10, augmented_scores=[0.15, 0.14, 0.13, 0.12], max_prototypes=1024
+    )
+    contract = _write_contract(
+        tmp_path / "contract.json", reference_path=reference, candidate_configurations={"reference": _candidate_configuration(1024)}
+    )
+    document = json.loads(contract.read_text(encoding="utf-8"))
+    document["gate"]["perVariantPairedDeltaGates"].pop()
+    document["contractSha256"] = tool.canonical_json_sha256({key: value for key, value in document.items() if key != "contractSha256"})
+    contract.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    with pytest.raises(tool.SelectionError, match="exactly cover sorted augmentation variants"):
+        tool.run_selection(contract, {"reference": reference}, tmp_path / "selection.json")
 
 
 def test_normal_selection_reports_no_eligible_configuration_and_refuses_repo_paths(tmp_path: Path) -> None:

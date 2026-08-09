@@ -52,6 +52,14 @@ stronger noise. Those effects need real device/fixture evidence before they
 can be treated as normal-label-preserving simulation. The current JPEG output
 is 4:4:4; mobile 4:2:0 behavior remains a separate, future experiment.
 
+V3-R4 is a seed-replication study, not a new visual effect: it uses the
+unchanged v3 recipe with `--variants-per-parent 4`. Its formal normal-only
+selection contract must bind that count. Every normal FIT and tuning parent
+must then have exactly variants `1` through `4`, and each variant is subject
+to its own paired-score P95/max gate. This prevents one deterministic draw
+from being hidden in a pooled robustness summary. It still must not read or
+score the frozen blind set.
+
 ## Generate a package
 
 The destination must be a new or empty directory outside this Git worktree.

@@ -62,14 +62,14 @@ existing report.
 
 ## Normal-only configuration lock
 
-Iteration-report schema `1.3` adds `normalOnlyEvidence` and an exact candidate
+Iteration-report schema `1.4` adds `normalOnlyEvidence` and an exact candidate
 configuration. The evidence contains score-free, stable-sorted feature,
 calibration, and original-tuning membership lists plus independently checked
 digests. A normal-only report must have zero blind and anomaly feature inputs,
 only `THRESHOLD_TUNING`/`NOMINAL` score records, and no pixel metrics. Reports
 that do not meet those conditions cannot enter a formal candidate comparison.
 
-Every 1.3 report also emits a canonical `featureExtractor` object and its
+Every 1.4 report also emits a canonical `featureExtractor` object and its
 digest. It pins the local DINO repository content tree, model weights,
 entrypoint, exact preprocessing configuration, runner/production/loader/
 augmentation-source modules, Python/Torch/Torchvision/Pillow/NumPy versions,
@@ -86,8 +86,15 @@ cache entry is a miss, never an accepted feature. This makes a local model
 repository, preprocessing, dependency, or feature-array change invalidate the
 cache instead of silently mixing results between configurations.
 
+For a multi-seed augmentation run, report identity and every tuning score
+carry `variantId` (`null` for an original; a positive integer for a derived
+image). The external contract fixes `augmentationVariantsPerParent`; the
+selector requires every FIT and tuning parent × variant pair, validates its
+parent/source/role/category/recipe linkage, and applies explicit P95/max
+paired-score gates per variant as well as the aggregate gates.
+
 After a reference normal-only report exists, freeze an external selection
-contract (schema `1.1`) before running the remaining predeclared candidates.
+contract (schema `1.2`) before running the remaining predeclared candidates.
 Each candidate
 entry binds its exact algorithm configuration (including patch-memory and
 top-k settings), not just a friendly ID. The contract also binds the
@@ -133,11 +140,12 @@ JSON bytes it validates and emits either a research configuration lock or
 authorizes production/physical use.
 
 Do not compare an unaugmented report against an augmented report through this
-selector: their normal input identities differ. Legacy `1.0`/`1.1`/`1.2`
-iteration reports lack either the required normal-only evidence or full feature
-extractor provenance; preserve them as historical audit artifacts, but
-regenerate the external package and rerun only `--normal-only` after the
-current tool revision instead of retrofitting an old report.
+selector: their normal input identities differ. Legacy `1.0`/`1.1`/`1.2`/`1.3`
+iteration reports lack either the required normal-only evidence, full feature
+extractor provenance, or formal variant membership. Preserve them as
+historical audit artifacts, but regenerate the external package and rerun only
+`--normal-only` after the current tool revision instead of retrofitting an old
+report.
 
 ## Strict comparison
 

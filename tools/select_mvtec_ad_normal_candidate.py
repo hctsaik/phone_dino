@@ -25,9 +25,9 @@ if str(REPOSITORY_ROOT / "src") not in sys.path:
 from phone_dino.mvtec_research import canonical_json_sha256, sha256_file
 
 
-CONTRACT_SCHEMA_VERSION = "phone-dino.mvtec-ad-normal-selection-contract/1.1"
-ITERATION_REPORT_SCHEMA_VERSION = "phone-dino.mvtec-ad-iteration-report/1.3"
-SELECTION_SCHEMA_VERSION = "phone-dino.mvtec-ad-normal-selection/1.1"
+CONTRACT_SCHEMA_VERSION = "phone-dino.mvtec-ad-normal-selection-contract/1.2"
+ITERATION_REPORT_SCHEMA_VERSION = "phone-dino.mvtec-ad-iteration-report/1.4"
+SELECTION_SCHEMA_VERSION = "phone-dino.mvtec-ad-normal-selection/1.2"
 FEATURE_CACHE_SCHEMA_VERSION = "phone-dino.mvtec-ad-feature-cache/1.1"
 FEATURE_EXTRACTOR_SCHEMA_VERSION = "phone-dino.mvtec-ad-feature-extractor/1.0"
 SELECTION_PURPOSE = "OFFLINE_MVTEC_NORMAL_ONLY_CONFIGURATION_LOCK"
@@ -51,6 +51,7 @@ IDENTITY_FIELDS = {
     "kind",
     "sourceSha256",
     "isAugmentation",
+    "variantId",
     "parentCaseId",
     "parentSourceSha256",
     "augmentationRecipeSha256",
@@ -232,6 +233,49 @@ def _unique_string_list(value: object, *, name: str) -> list[str]:
     return result
 
 
+def _expected_augmentation_variant_ids(universe: dict[str, Any]) -> list[int]:
+    variants_per_parent = universe.get("augmentationVariantsPerParent")
+    if (
+        not isinstance(variants_per_parent, int)
+        or isinstance(variants_per_parent, bool)
+        or not 1 <= variants_per_parent <= 8
+    ):
+        raise SelectionError("candidateUniverse.augmentationVariantsPerParent must be between 1 and 8")
+    return list(range(1, variants_per_parent + 1))
+
+
+def _per_variant_paired_delta_gates(gate: dict[str, Any], expected_variant_ids: list[int]) -> dict[int, dict[str, float]]:
+    raw_gates = gate.get("perVariantPairedDeltaGates")
+    if not isinstance(raw_gates, list):
+        raise SelectionError("gate.perVariantPairedDeltaGates must be an array")
+    parsed: dict[int, dict[str, float]] = {}
+    ordered_ids: list[int] = []
+    for index, raw_gate in enumerate(raw_gates):
+        if not isinstance(raw_gate, dict):
+            raise SelectionError(f"gate.perVariantPairedDeltaGates[{index}] must be an object")
+        _require_exact_fields(
+            raw_gate,
+            {"variantId", "maxPairedAugmentedScoreDeltaP95", "maxPairedAugmentedScoreDeltaMax"},
+            name=f"gate.perVariantPairedDeltaGates[{index}]",
+        )
+        variant_id = raw_gate.get("variantId")
+        if not isinstance(variant_id, int) or isinstance(variant_id, bool) or variant_id <= 0:
+            raise SelectionError("gate.perVariantPairedDeltaGates variantId must be a positive integer")
+        if variant_id in parsed:
+            raise SelectionError("gate.perVariantPairedDeltaGates contains a duplicate variantId")
+        limits = {
+            name: _require_finite_number(raw_gate, name)
+            for name in ("maxPairedAugmentedScoreDeltaP95", "maxPairedAugmentedScoreDeltaMax")
+        }
+        if any(value < 0.0 for value in limits.values()):
+            raise SelectionError("gate.perVariantPairedDeltaGates limits must be non-negative")
+        parsed[variant_id] = limits
+        ordered_ids.append(variant_id)
+    if ordered_ids != expected_variant_ids:
+        raise SelectionError("gate.perVariantPairedDeltaGates must exactly cover sorted augmentation variants")
+    return parsed
+
+
 def _document_digest(document: dict[str, Any], field: str) -> str:
     unsigned = dict(document)
     unsigned.pop(field, None)
@@ -278,6 +322,7 @@ def _load_contract_with_digest(path: Path) -> tuple[dict[str, Any], str]:
         "featureExtractorIdentitySha256",
         "categories", "normalInputIdentitySha256", "calibrationInputIdentitySha256",
         "originalTuningInputIdentitySha256", "augmentationManifestSha256", "recipeSha256",
+        "augmentationVariantsPerParent",
     }, name="candidateUniverse")
     _require_string(universe, "algorithmId")
     _require_sha256(universe, "modelWeightsSha256")
@@ -294,6 +339,7 @@ def _load_contract_with_digest(path: Path) -> tuple[dict[str, Any], str]:
     _require_sha256(universe, "originalTuningInputIdentitySha256")
     _require_sha256(universe, "augmentationManifestSha256")
     _require_sha256(universe, "recipeSha256")
+    expected_variant_ids = _expected_augmentation_variant_ids(universe)
     reference = _require_mapping(document, "referenceCandidate")
     _require_exact_fields(reference, {"id", "reportSha256"}, name="referenceCandidate")
     reference_id = _require_string(reference, "id")
@@ -301,10 +347,11 @@ def _load_contract_with_digest(path: Path) -> tuple[dict[str, Any], str]:
         raise SelectionError("referenceCandidate.id must appear in candidates")
     _require_sha256(reference, "reportSha256")
     gate = _require_mapping(document, "gate")
-    _require_exact_fields(gate, set(GATE_NAMES), name="gate")
+    _require_exact_fields(gate, set(GATE_NAMES) | {"perVariantPairedDeltaGates"}, name="gate")
     for name in GATE_NAMES:
         if _require_finite_number(gate, name) < 0.0:
             raise SelectionError(f"gate {name} must be non-negative")
+    _per_variant_paired_delta_gates(gate, expected_variant_ids)
     selection = _require_mapping(document, "selection")
     _require_exact_fields(selection, {"objective"}, name="selection")
     if selection.get("objective") != NORMAL_OBJECTIVE:
@@ -364,10 +411,15 @@ def _identity_record(value: object, *, categories: set[str], name: str) -> dict[
     if not isinstance(record.get("isAugmentation"), bool):
         raise SelectionError(f"{name} isAugmentation must be a boolean")
     if record["isAugmentation"]:
+        variant_id = record.get("variantId")
+        if not isinstance(variant_id, int) or isinstance(variant_id, bool) or variant_id <= 0:
+            raise SelectionError(f"{name} derived record variantId must be a positive integer")
         _require_string(record, "parentCaseId")
         _require_sha256(record, "parentSourceSha256")
         _require_sha256(record, "augmentationRecipeSha256")
-    elif any(record.get(field) is not None for field in ("parentCaseId", "parentSourceSha256", "augmentationRecipeSha256")):
+    elif any(record.get(field) is not None for field in (
+        "variantId", "parentCaseId", "parentSourceSha256", "augmentationRecipeSha256"
+    )):
         raise SelectionError(f"{name} original record has unexpected augmentation parent fields")
     return record | {"caseId": case_id}
 
@@ -386,7 +438,9 @@ def _normal_score_record(value: object, *, categories: set[str], name: str) -> d
     if not isinstance(value, dict):
         raise SelectionError(f"{name} record must be an object")
     record = dict(value)
-    common_fields = {"caseId", "category", "role", "kind", "defect", "sourceSha256", "isAugmentation", "score"}
+    common_fields = {
+        "caseId", "category", "role", "kind", "defect", "sourceSha256", "isAugmentation", "variantId", "score"
+    }
     expected_fields = common_fields | ({"parentCaseId", "parentSourceSha256", "augmentationRecipeSha256"} if record.get("isAugmentation") is True else set())
     _require_exact_fields(record, expected_fields, name=name)
     case_id = _require_string(record, "caseId")
@@ -402,9 +456,14 @@ def _normal_score_record(value: object, *, categories: set[str], name: str) -> d
         raise SelectionError(f"{name} score is outside the cosine-distance range")
     record["score"] = score
     if record["isAugmentation"]:
+        variant_id = record.get("variantId")
+        if not isinstance(variant_id, int) or isinstance(variant_id, bool) or variant_id <= 0:
+            raise SelectionError(f"{name} derived record variantId must be a positive integer")
         _require_string(record, "parentCaseId")
         _require_sha256(record, "parentSourceSha256")
         _require_sha256(record, "augmentationRecipeSha256")
+    elif record.get("variantId") is not None:
+        raise SelectionError(f"{name} original record has an unexpected variantId")
     return record | {"caseId": case_id}
 
 
@@ -416,10 +475,48 @@ def _score_identity(record: dict[str, Any]) -> dict[str, Any]:
         "kind": record["kind"],
         "sourceSha256": record["sourceSha256"],
         "isAugmentation": record["isAugmentation"],
+        "variantId": record["variantId"],
         "parentCaseId": record.get("parentCaseId"),
         "parentSourceSha256": record.get("parentSourceSha256"),
         "augmentationRecipeSha256": record.get("augmentationRecipeSha256"),
     }
+
+
+def _validate_augmentation_variant_coverage(
+    feature_inputs: list[dict[str, Any]],
+    universe: dict[str, Any],
+) -> list[int]:
+    """Require every normal FIT/tuning parent to carry each frozen variant once."""
+
+    expected_variant_ids = _expected_augmentation_variant_ids(universe)
+    expected_variant_set = set(expected_variant_ids)
+    originals_by_case = {record["caseId"]: record for record in feature_inputs if not record["isAugmentation"]}
+    if not originals_by_case:
+        raise SelectionError("normal-only feature membership has no original parents")
+    variants_by_parent: dict[str, list[int]] = defaultdict(list)
+    for record in feature_inputs:
+        if not record["isAugmentation"]:
+            continue
+        parent = originals_by_case.get(record["parentCaseId"])
+        if parent is None:
+            raise SelectionError("derived normal feature record has no original parent")
+        if any(record[name] != parent[name] for name in ("category", "role", "kind")):
+            raise SelectionError("derived normal feature record does not match its original parent membership")
+        if record["parentSourceSha256"] != parent["sourceSha256"]:
+            raise SelectionError("derived normal feature parent digest does not match")
+        if record["augmentationRecipeSha256"] != universe["recipeSha256"]:
+            raise SelectionError("derived normal feature recipe digest does not match the frozen universe")
+        variant_id = record["variantId"]
+        if variant_id not in expected_variant_set:
+            raise SelectionError("derived normal feature variantId is outside the frozen coverage")
+        variants_by_parent[parent["caseId"]].append(variant_id)
+    for parent_case_id in sorted(originals_by_case):
+        variant_ids = variants_by_parent.get(parent_case_id, [])
+        if len(variant_ids) != len(set(variant_ids)):
+            raise SelectionError("derived normal feature coverage has a duplicate variantId for one parent")
+        if sorted(variant_ids) != expected_variant_ids:
+            raise SelectionError("derived normal feature coverage does not match the frozen variant set for one parent")
+    return expected_variant_ids
 
 
 def _validate_normal_evidence(
@@ -451,6 +548,7 @@ def _validate_normal_evidence(
         raise SelectionError("normalOnlyEvidence feature input identity does not match featureInputs")
     if feature_identity != universe["normalInputIdentitySha256"]:
         raise SelectionError("normalOnlyEvidence input identity does not match the frozen universe")
+    _validate_augmentation_variant_coverage(feature_inputs, universe)
     if (
         _require_nonnegative_int(evidence, "reportedScoreCount") != len(score_records)
         or _require_nonnegative_int(evidence, "calibrationScoreCount") != len(calibration_records)
@@ -467,6 +565,11 @@ def _validate_normal_evidence(
         raise SelectionError("normalOnlyEvidence calibration input count does not match calibrationScores")
     if any(record["role"] != "THRESHOLD_TUNING" or record["kind"] != "NOMINAL" for record in calibration_inputs):
         raise SelectionError("normalOnlyEvidence calibrationInputs are not normal-only tuning membership")
+    expected_calibration_inputs = [
+        record for record in feature_inputs if record["role"] == "THRESHOLD_TUNING"
+    ]
+    if calibration_inputs != expected_calibration_inputs:
+        raise SelectionError("normalOnlyEvidence calibration membership does not match tuning feature membership")
     calibration_identity = canonical_json_sha256(calibration_inputs)
     if evidence.get("calibrationInputIdentitySha256") != calibration_identity:
         raise SelectionError("normalOnlyEvidence calibration input identity does not match calibrationInputs")
@@ -495,7 +598,8 @@ def _derive_category_metrics(
     category: str,
     records: list[dict[str, Any]],
     category_report: dict[str, Any],
-) -> dict[str, float]:
+    expected_variant_ids: list[int],
+) -> dict[str, Any]:
     originals = [record for record in records if not record["isAugmentation"]]
     augmented = [record for record in records if record["isAugmentation"]]
     if not originals or not augmented:
@@ -504,6 +608,8 @@ def _derive_category_metrics(
     if len(original_by_case) != len(originals):
         raise SelectionError(f"{category} has duplicate original tuning caseIds")
     deltas: list[float] = []
+    deltas_by_variant: dict[int, list[float]] = {variant_id: [] for variant_id in expected_variant_ids}
+    covered_pairs: set[tuple[str, int]] = set()
     covered_parent_case_ids: set[str] = set()
     for record in augmented:
         parent = original_by_case.get(record["parentCaseId"])
@@ -511,10 +617,26 @@ def _derive_category_metrics(
             raise SelectionError(f"{category} derived tuning record has no original tuning parent")
         if record["parentSourceSha256"] != parent["sourceSha256"]:
             raise SelectionError(f"{category} derived tuning parent digest does not match")
+        variant_id = record["variantId"]
+        if variant_id not in deltas_by_variant:
+            raise SelectionError(f"{category} derived tuning variantId is outside the frozen coverage")
+        pair = (record["parentCaseId"], variant_id)
+        if pair in covered_pairs:
+            raise SelectionError(f"{category} derived tuning has a duplicate parent and variantId")
+        covered_pairs.add(pair)
         covered_parent_case_ids.add(record["parentCaseId"])
-        deltas.append(record["score"] - parent["score"])
+        delta = record["score"] - parent["score"]
+        deltas.append(delta)
+        deltas_by_variant[variant_id].append(delta)
     if set(original_by_case) != covered_parent_case_ids:
         raise SelectionError(f"{category} original tuning cases are missing derived coverage")
+    expected_pairs = {
+        (case_id, variant_id)
+        for case_id in original_by_case
+        for variant_id in expected_variant_ids
+    }
+    if covered_pairs != expected_pairs:
+        raise SelectionError(f"{category} derived tuning coverage does not match the frozen parent and variant set")
     all_scores = [record["score"] for record in records]
     original_summary = _quantile_summary([record["score"] for record in originals], prefix="originalTuningNormalScore")
     augmented_summary = _quantile_summary([record["score"] for record in augmented], prefix="augmentedTuningNormalScore")
@@ -532,12 +654,21 @@ def _derive_category_metrics(
         if category_report.get(name) is not None:
             raise SelectionError(f"categories.{category}.{name} must be null in a normal-only report")
     delta_summary = _quantile_summary(deltas, prefix="pairedAugmentedScoreDelta")
+    per_variant = []
+    for variant_id in expected_variant_ids:
+        summary = _quantile_summary(deltas_by_variant[variant_id], prefix="pairedAugmentedScoreDelta")
+        per_variant.append({
+            "variantId": variant_id,
+            "pairedAugmentedScoreDeltaP95": float(summary["pairedAugmentedScoreDeltaP95"]),
+            "pairedAugmentedScoreDeltaMax": float(summary["pairedAugmentedScoreDeltaMax"]),
+        })
     return {
         "threshold": threshold,
         "originalP95": float(original_summary["originalTuningNormalScoreP95"]),
         "augmentedP95": float(augmented_summary["augmentedTuningNormalScoreP95"]),
         "pairedAugmentedScoreDeltaP95": float(delta_summary["pairedAugmentedScoreDeltaP95"]),
         "pairedAugmentedScoreDeltaMax": float(delta_summary["pairedAugmentedScoreDeltaMax"]),
+        "pairedAugmentedScoreDeltaByVariant": per_variant,
     }
 
 
@@ -685,7 +816,7 @@ def validate_candidate_report(
     augmentation = _require_mapping(report, "augmentation")
     _require_exact_fields(augmentation, {
         "state", "blindPolicy", "blindAugmentedCount", "augmentationManifestPath",
-        "augmentationManifestSha256", "recipeSha256", "derivedRecordCount",
+        "augmentationManifestSha256", "recipeSha256", "variantsPerParent", "derivedRecordCount",
     }, name="augmentation")
     if (
         augmentation.get("state") != "NORMAL_FIT_AND_TUNING_ONLY"
@@ -697,6 +828,14 @@ def validate_candidate_report(
         raise SelectionError("candidate report augmentation identity does not match the contract")
     if augmentation.get("recipeSha256") != universe["recipeSha256"]:
         raise SelectionError("candidate report recipe identity does not match the contract")
+    if (
+        not isinstance(augmentation.get("variantsPerParent"), int)
+        or isinstance(augmentation.get("variantsPerParent"), bool)
+        or not 1 <= augmentation["variantsPerParent"] <= 8
+    ):
+        raise SelectionError("candidate report augmentation variantsPerParent is invalid")
+    if augmentation.get("variantsPerParent") != universe["augmentationVariantsPerParent"]:
+        raise SelectionError("candidate report augmentation variant coverage does not match the contract")
     _require_string(augmentation, "augmentationManifestPath")
     if _require_nonnegative_int(augmentation, "derivedRecordCount") <= 0:
         raise SelectionError("candidate report augmentation must contain derived normal records")
@@ -793,8 +932,14 @@ def validate_candidate_report(
     by_category: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for record in calibration_records:
         by_category[str(record["category"])].append(record)
+    expected_variant_ids = _expected_augmentation_variant_ids(universe)
     metrics = {
-        category: _derive_category_metrics(category, by_category[category], _require_mapping(categories, category))
+        category: _derive_category_metrics(
+            category,
+            by_category[category],
+            _require_mapping(categories, category),
+            expected_variant_ids,
+        )
         for category in expected_categories
     }
     return {
@@ -804,11 +949,13 @@ def validate_candidate_report(
 
 
 def _gate_reasons(
-    candidate_metrics: dict[str, dict[str, float]],
-    reference_metrics: dict[str, dict[str, float]],
+    candidate_metrics: dict[str, dict[str, Any]],
+    reference_metrics: dict[str, dict[str, Any]],
     gate: dict[str, Any],
+    expected_variant_ids: list[int],
 ) -> list[str]:
     reasons: list[str] = []
+    per_variant_gates = _per_variant_paired_delta_gates(gate, expected_variant_ids)
     for category in sorted(candidate_metrics):
         candidate = candidate_metrics[category]
         reference = reference_metrics[category]
@@ -823,10 +970,28 @@ def _gate_reasons(
             maximum = _require_finite_number(gate, name)
             if value > maximum:
                 reasons.append(f"{category}.{name}={value:.12g} exceeds {maximum:.12g}")
+        per_variant_metrics = candidate["pairedAugmentedScoreDeltaByVariant"]
+        if not isinstance(per_variant_metrics, list):  # pragma: no cover - derived internally above
+            raise SelectionError("derived per-variant metrics are invalid")
+        if [metric.get("variantId") for metric in per_variant_metrics] != expected_variant_ids:
+            raise SelectionError("derived per-variant metrics do not match the frozen coverage")
+        for metric in per_variant_metrics:
+            variant_id = metric["variantId"]
+            limits = per_variant_gates[variant_id]
+            for metric_name, gate_name in (
+                ("pairedAugmentedScoreDeltaP95", "maxPairedAugmentedScoreDeltaP95"),
+                ("pairedAugmentedScoreDeltaMax", "maxPairedAugmentedScoreDeltaMax"),
+            ):
+                value = float(metric[metric_name])
+                maximum = limits[gate_name]
+                if value > maximum:
+                    reasons.append(
+                        f"{category}.variant{variant_id}.{gate_name}={value:.12g} exceeds {maximum:.12g}"
+                    )
     return reasons
 
 
-def _objective_values(candidate_id: str, metrics: dict[str, dict[str, float]]) -> dict[str, float | str]:
+def _objective_values(candidate_id: str, metrics: dict[str, dict[str, Any]]) -> dict[str, float | str]:
     thresholds = [value["threshold"] for value in metrics.values()]
     paired_p95 = [value["pairedAugmentedScoreDeltaP95"] for value in metrics.values()]
     return {
@@ -900,6 +1065,7 @@ def run_selection(contract_path: Path, candidate_paths: dict[str, Path], output_
     elif reference_result["reportSha256"] != reference["reportSha256"]:
         reference_error = "reference candidate report digest does not match the contract"
     eligible: list[dict[str, Any]] = []
+    expected_variant_ids = _expected_augmentation_variant_ids(_require_mapping(contract, "candidateUniverse"))
     for evaluation in evaluations:
         candidate_id = evaluation["id"]
         if evaluation["state"] != "VALID_PENDING_GATE":
@@ -912,6 +1078,7 @@ def run_selection(contract_path: Path, candidate_paths: dict[str, Path], output_
             valid[candidate_id]["normalMetricsByCategory"],
             reference_result["normalMetricsByCategory"],
             _require_mapping(contract, "gate"),
+            expected_variant_ids,
         )
         if reasons:
             evaluation["state"] = "REJECTED_GATE"

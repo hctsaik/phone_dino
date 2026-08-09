@@ -9,6 +9,12 @@ import numpy as np
 import pytest
 from PIL import Image
 
+from phone_dino.mvtec_research import generate_normal_augmentations
+
+
+REPOSITORY_ROOT = Path(__file__).parents[1]
+RECIPE_V3_PATH = REPOSITORY_ROOT / "tools" / "mvtec_ad_camera_lighting_recipe_v3.json"
+
 
 def _tool_module():
     path = Path(__file__).parents[1] / "tools" / "run_mvtec_ad_iteration.py"
@@ -213,6 +219,25 @@ def test_normal_calibration_summary_uses_only_scored_normal_records() -> None:
     }
 
 
+def test_iteration_identity_and_score_records_preserve_augmentation_variant_ids() -> None:
+    tool = _tool_module()
+    original = {
+        "caseId": "capsule/tuning/001", "category": "capsule", "role": "THRESHOLD_TUNING",
+        "kind": "NOMINAL", "defect": "good", "sourceSha256": f"sha256:{'1' * 64}",
+        "isAugmentation": False, "variantId": None, "score": 0.1,
+    }
+    derived = {
+        "caseId": "capsule/tuning/001/camera-augmentation/04", "category": "capsule", "role": "THRESHOLD_TUNING",
+        "kind": "NOMINAL", "defect": "good", "sourceSha256": f"sha256:{'2' * 64}",
+        "isAugmentation": True, "variantId": 4, "parentCaseId": original["caseId"],
+        "parentSourceSha256": original["sourceSha256"], "augmentationRecipeSha256": f"sha256:{'3' * 64}", "score": 0.2,
+    }
+    assert tool.input_identity_record(original)["variantId"] is None
+    assert tool._score_record(original)["variantId"] is None
+    assert tool.input_identity_record(derived)["variantId"] == 4
+    assert tool._score_record(derived)["variantId"] == 4
+
+
 def _write_normal_only_manifest(tmp_path: Path, *, fit_kind: str = "NOMINAL") -> tuple[Path, Path]:
     image_path = tmp_path / "normal.png"
     Image.new("RGB", (32, 32), (90, 130, 180)).save(image_path)
@@ -293,7 +318,7 @@ def test_normal_only_iteration_never_embeds_blind_inputs(tmp_path: Path, monkeyp
     assert evidence["calibrationInputIdentitySha256"].startswith("sha256:")
     assert evidence["originalTuningInputCount"] == 1
     assert evidence["originalTuningInputIdentitySha256"] == evidence["calibrationInputIdentitySha256"]
-    assert report["schemaVersion"] == "phone-dino.mvtec-ad-iteration-report/1.3"
+    assert report["schemaVersion"] == "phone-dino.mvtec-ad-iteration-report/1.4"
     assert report["algorithm"]["modelRepositorySha256"] == report["featureExtractor"]["modelRepositorySha256"]
     assert report["featureExtractorIdentitySha256"] == tool.canonical_json_sha256(report["featureExtractor"])
     assert report["execution"]["featureCacheSchemaVersion"] == "phone-dino.mvtec-ad-feature-cache/1.1"
@@ -304,6 +329,59 @@ def test_normal_only_iteration_never_embeds_blind_inputs(tmp_path: Path, monkeyp
         "batchSize": 4,
     }
     assert report["candidateConfigurationSha256"] == tool.canonical_json_sha256(report["candidateConfiguration"])
+
+
+def test_normal_only_iteration_reports_all_four_generated_variant_ids(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tool = _tool_module()
+    manifest_path, _ = _write_normal_only_manifest(tmp_path)
+    augmentation_directory = tmp_path / "augmented"
+    generate_normal_augmentations(
+        manifest_path,
+        RECIPE_V3_PATH,
+        augmentation_directory,
+        variants_per_parent=4,
+        repository_root=tmp_path / "repo",
+    )
+    model_repo = tmp_path / "model-repository"
+    model_repo.mkdir()
+    (model_repo / "hubconf.py").write_text("# fake model repository\n", encoding="utf-8")
+    weights_path = tmp_path / "weights.pth"
+    weights_path.write_bytes(b"offline-test-weights")
+
+    class SpyEmbedder:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def extract(self, images: list[Image.Image], *, feature_kind: str) -> list[object]:
+            assert feature_kind == "global"
+            return [np.asarray([1.0] * 384, dtype=np.float32) for _ in images]
+
+    monkeypatch.setattr(tool, "ResearchBatchEmbedder", SpyEmbedder)
+    report = tool.run(
+        manifest_path,
+        tmp_path / "normal-only-r4-report.json",
+        model_repo=model_repo,
+        model_weights=weights_path,
+        device="cpu",
+        algorithm="global-knn",
+        max_prototypes=1,
+        top_k_patches=1,
+        batch_size=4,
+        prototype_block_size=1,
+        augmentation_manifest_path=augmentation_directory / "augmentation_manifest.json",
+        include_pixel_metrics=False,
+        normal_only=True,
+    )
+    assert report["augmentation"]["variantsPerParent"] == 4
+    feature_inputs = report["normalOnlyEvidence"]["featureInputs"]
+    assert {record["variantId"] for record in feature_inputs if not record["isAugmentation"]} == {None}
+    assert {record["variantId"] for record in feature_inputs if record["isAugmentation"]} == {1, 2, 3, 4}
+    calibration_scores = report["calibrationScores"]
+    assert {record["variantId"] for record in calibration_scores if not record["isAugmentation"]} == {None}
+    assert {record["variantId"] for record in calibration_scores if record["isAugmentation"]} == {1, 2, 3, 4}
 
 
 def test_iteration_rejects_extractor_input_changes_during_model_load(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
