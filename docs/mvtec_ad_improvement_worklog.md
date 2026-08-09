@@ -220,6 +220,55 @@ per-variant gate. This is a normal-robustness configuration lock only; it does
 not prove anomaly detection, create a production threshold, qualify a physical
 device, or authorize another use of the current blind set.
 
+## V4 JPEG 4:2:0 four-variant normal-only configuration lock (2026-08-09)
+
+V4 is a deliberately single-factor extension of V3: it keeps the exact V3
+geometry, photometry, off-axis lens shading, JPEG quality range, and V2-based
+sampling anchor, while changing only the encoded JPEG chroma sampling to
+4:2:0. The committed implementation `de55a73` uses a closed V4 recipe,
+reopens every JPEG to attest RGB components, sampling factors, non-progressive
+coding, and the quantization tables derived from its sampled quality. It also
+rejects any nominal-but-non-`good` FIT/tuning parent before augmentation or
+iteration.
+
+The fresh external package at
+`camera_capture_v4_jpeg420_r4\augmentation_manifest.json` was generated from
+a clean detached `de55a73` worktree. It contains 768 normal-only derivatives
+(576 FIT, 192 threshold-tuning; 256 per category) with exactly four variants
+per parent, `BLIND_ORIGINAL_ONLY`, no masks, and no blind inputs. Its declared
+manifest digest is
+`sha256:f40cafb298bd2ba5295780124f2995ec12dda5aeb5acdf303049756ea7323dc3`
+(file digest
+`sha256:12821667ab5f0851d6fb275cb9a21887cfedc081a385269199611b0e9a7ba2e6`);
+the locked V4 recipe digest is
+`sha256:5a812712609b48bd63321403eaadc4737ff1a0732a8177d35b169b0ef20a451d`.
+
+The V4 reference report was normal-only from a cold cache (960 misses,
+286.68 s); the predeclared 2,048-prototype candidate reused all 960 verified
+entries (62.42 s). Both reports have 960 normal feature inputs, 240 tuning
+calibration scores, 48 original-only reported tuning scores,
+`blindReporting.state: NOT_RUN`, zero blind/anomaly feature inputs, and no
+pixel metrics. Before running the candidate, the external schema-1.2 contract
+`selection_v4_jpeg420_r4\v4_r4_normal_only_contract.json` fixed the two exact
+candidate configurations and the four per-variant P95/max gates. Its declared
+digest is
+`sha256:eaf688b6ea960a20a8dd2dc9529bb53bbecf2f693652aace8aee900bb2be08ad`.
+
+| Candidate | Report file digest | Worst paired delta P95 | Worst per-variant delta P95/max | Worst threshold | Mean threshold | Selector result |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| V4-R4 1024 | `sha256:ec87a3bb7e2110ae9ac2282f172f48782084271ef49a51d5b4ca04fa9dbc22c2` | 0.03380 | 0.04057 | 0.32273 | 0.29833 | Eligible |
+| V4-R4 2048 | `sha256:fa78513e4bb3b9dd9ceec721d722f1d4096e75f2e52f9c28ffb7727894bd72de` | 0.02482 | 0.03323 | 0.26674 | 0.25937 | Locked |
+
+The JSON-only selection result at
+`selection_v4_jpeg420_r4\v4_r4_normal_selection.json` has file digest
+`sha256:1c99fc61841a2f087191d7df746093102eb4162f24c618c95a471eb5346355fc`
+and selected `v4-r4-2048`; both candidates passed every frozen gate. This is
+only a V4-envelope normal-robustness configuration lock. V3-R4 and V4-R4 use
+different derivative bytes and frozen augmentation identities, so the strict
+selector intentionally does not compare or promote one envelope over the
+other. No frozen blind image, anomaly label, defect result, or mask was read
+for this decision.
+
 ## Physical readiness audit (2026-08-09)
 
 The offline research result was not used as a substitute for a physical-device
