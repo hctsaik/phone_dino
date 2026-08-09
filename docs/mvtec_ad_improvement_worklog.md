@@ -480,6 +480,31 @@ and the shared feature-extractor identity is
 The next step is to freeze an explicit normal-selection contract before
 opening the untouched `NORMAL_SELECTION` partition.
 
+## Fresh normal selection contract frozen (2026-08-09)
+
+The first fresh normal-selection contract is now frozen externally at
+`fresh_normal_holdout_v1\selection_protocol_v1\fresh_normal_selection_contract.json`.
+Its file was created by the JSON-only contract tool before any
+`NORMAL_SELECTION` or `NORMAL_CONFIRMATION` image was opened.
+
+| Binding | Digest |
+| --- | --- |
+| Contract file digest | `sha256:98f03fffd3a0bb8cf5c37a82a59fef3bda6e344558fb0b686a3bed30e99547d2` |
+| Contract declared digest | `sha256:cb0123fd4dec344bacedc23f0bf9a64a7e8deeeb12ea4b11daf90348c2171d95` |
+| Candidate-universe identity | `sha256:8b9a723373653252dd6fb635a5a22c76899d2677df9438dd2fb7d5487cf2d6eb` |
+| Raw normal-selection membership identity | `sha256:e05fb962f6b0b2678e8eae7bbdb73449b4f9f190221f54052e9e4dd9a65640d4` |
+| Raw normal-confirmation membership identity | `sha256:04f42f3f85459428e1c70ceb983fb586077a1b6d87437831748fe8f89e7611bd` |
+
+It binds exactly the 1,024- and 2,048-prototype development reports, their
+closed raw-tuning thresholds, their shared feature extractor, one FIT-only R4
+package, and the complete path-free held-out normal membership. The explicit
+per-category gates allow at most 12.5% above the frozen raw-tuning threshold,
+P95 excess of 0.05, and maximum excess of 0.10. The objective is fixed before
+selection: minimize worst and mean above-threshold rates, then worst and mean
+P95 excess, then candidate ID. The next action is a separate one-time claim
+and receipt; that action, not contract creation, will authorize the first read
+of raw normal selection inputs.
+
 ## Physical readiness audit (2026-08-09)
 
 The offline research result was not used as a substitute for a physical-device
