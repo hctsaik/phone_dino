@@ -269,6 +269,42 @@ selector intentionally does not compare or promote one envelope over the
 other. No frozen blind image, anomaly label, defect result, or mask was read
 for this decision.
 
+## V5 fixed-Q95 implementation boundary (2026-08-09)
+
+The next research implementation is intentionally narrower than adding a new
+lighting, blur, glare, or noise effect. The schema-1.2 V5 recipe preserves the
+full V4 parameter stream: its V2 sampling anchor, 95--98 sampled JPEG quality,
+geometry, photometry, off-axis lens shading, and RNG call order are unchanged.
+The sole output difference is a fixed JPEG Q95 / 4:2:0 coding profile. Every
+V5 record preserves the sampled `parameters.jpegQuality` for reproducibility,
+then separately records `outputJpegQuality: 95`; RGB component layout,
+sampling factors, non-progressive coding, and the locked Q95 quantization-table
+digest are reopened and checked both during generation and before scoring.
+
+The Q95 table digest
+`sha256:f67e35fd0dcd2fd9f999077e2aae8560e6327a8477c45427f6ea2e0a224cd187`
+is an explicit fail-closed encoder requirement. A Pillow/libjpeg change that
+emits different Q95 tables will stop package generation/loading rather than
+quietly changing the study. This is only a generic research coding-profile
+probe; an engineering JPEG-header observation does not calibrate a phone or
+qualify a physical capture path.
+
+The augmentation manifest format is now `1.3` because it adds the mandatory
+`outputJpegQuality` record binding. Existing V4-R4 schema-`1.2` artifacts are
+locked historical evidence and intentionally cannot be consumed by the new
+loader: they retain their `de55a73` generator identity and must be inspected
+with that pinned worktree, or regenerated as a new envelope. They must not be
+silently upgraded or ranked against V5.
+
+The planned external V5 execution is a new R4 package, new feature cache, and
+new normal-only selection directory. It will first run a 1,024-prototype
+reference with no blind/anomaly/mask input; only then will it freeze the V5
+manifest, feature/calibration identities, and two predeclared candidate
+configurations before running the 2,048-prototype candidate. Every category
+will use normal-only gates: no threshold or original-P95 increase versus the
+reference, plus aggregate and each-variant paired P95/max caps of `0.04`.
+No V3/V4/V5 cross-envelope selection and no new blind report are authorized.
+
 ## Physical readiness audit (2026-08-09)
 
 The offline research result was not used as a substitute for a physical-device

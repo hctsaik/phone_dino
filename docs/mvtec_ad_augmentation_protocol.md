@@ -61,6 +61,21 @@ encoded chroma sampling is the only intended visual difference. It is still a
 generic research simulation, not proof of a particular phone encoder, device
 calibration, physical qualification, or production authorization.
 
+[v5](../tools/mvtec_ad_camera_lighting_recipe_v5.json) is a separate,
+single-factor V4-compatible coding-profile probe. It retains the exact V4
+geometry, photometry, off-axis lens shading, `samplingSeedAnchor`, and
+95--98 JPEG-quality sampling stream. It adds no RNG draw or reorder: every
+sampled parameter, including `parameters.jpegQuality`, remains identical to
+V4 for the same parent and variant. Only the quality passed to Pillow is
+overridden to Q95, with 4:2:0 sampling, non-progressive coding, and the locked
+Q95 quantization-table digest
+`sha256:f67e35fd0dcd2fd9f999077e2aae8560e6327a8477c45427f6ea2e0a224cd187`.
+Each record separately reports the sampled quality and
+`outputJpegQuality: 95`, so the output profile cannot be confused with the
+preserved sampling stream. This is a bounded research probe motivated by an
+engineering JPEG-header observation, not a device calibration, native-capture
+attestation, physical qualification, or production authorization.
+
 V3-R4 is a seed-replication study, not a new visual effect: it uses the
 unchanged v3 recipe with `--variants-per-parent 4`. Its formal normal-only
 selection contract must bind that count. Every normal FIT and tuning parent
@@ -96,18 +111,19 @@ The manifest declares all of the following:
 - `blindPolicy: BLIND_ORIGINAL_ONLY`; and
 - the raw frozen-manifest file digest plus its declared manifest identity.
 
-The current generator emits augmentation-manifest schema `1.2`. It embeds the
+The current generator emits augmentation-manifest schema `1.3`. It embeds the
 parsed recipe and records generator module/entrypoint hashes, Git revision and
 worktree state, plus Python, Pillow, OpenCV, and NumPy versions. Every record
 also attests `outputEncoding` (JPEG/RGB, chroma subsampling, and the three
 decoded sampling factors). It also binds component IDs, quantization-table
 selectors, non-progressive encoding, and a SHA-256 of the two 64-value JPEG
 quantization tables. Those tables are independently rederived with the exact
-sampled JPEG quality and explicit Pillow save arguments. Generation reopens
-each written JPEG to verify that attestation; before scoring, the loader
+effective output JPEG quality and explicit Pillow save arguments. Generation
+reopens each written JPEG to verify that attestation; before scoring, the loader
 verifies it again after checking the file digest. This prevents a manifest
 whose hashes were recomputed from silently relabelling a 4:4:4 or other JPEG
-as v4 4:2:0, lowering its JPEG quality, or changing it to progressive coding.
+as v4/v5 4:2:0, lowering or changing its locked output JPEG quality, or
+changing it to progressive coding.
 It is a coding-profile check, not a replacement for an externally signed
 package or deterministic re-rendering when an adversary can replace pixels
 while preserving all JPEG header and quantization fields.
@@ -120,8 +136,15 @@ for this exact V4 experiment, so it cannot hide a geometry, photometry,
 quantization, progressive, or other visual-effect change behind the one-factor
 claim. The loader rederives every parameter set from its parent and variant and
 requires exactly every eligible normal parent times the declared variant count.
-Older `1.0`/`1.1` augmentation packages lack the current bindings and must be
-regenerated for a new iteration; they are not silently upgraded.
+V5 uses recipe schema `1.2`, which is reserved for that same V4 baseline plus
+only `jpegQualityOutputOverride: 95` and the fixed Q95 quantization-table
+digest. Augmentation schema `1.3` adds the mandatory, independently rederived
+`outputJpegQuality` record field. Historical V4-R4 schema-`1.2` packages are
+locked historical evidence: this current loader intentionally does not consume
+them because they predate that record contract and have a pinned generator
+module digest. Inspect them only with their pinned `de55a73` worktree, or
+regenerate a fresh independent envelope; never silently upgrade or compare
+them with V5 in one selection universe.
 
 Any score runner must verify these bindings before consuming the derived
 normal FIT/tuning images. It must verify every generated image SHA-256 and

@@ -1,0 +1,34 @@
+{
+  "authoritative": false,
+  "blindPolicy": "BLIND_ORIGINAL_ONLY",
+  "description": "Controlled V4-compatible narrow generic camera simulation with the same V2 samplingSeedAnchor, V3 off-axis lens shading, and JPEG 4:2:0 output. The V4 JPEG-quality draw remains recorded to preserve every RNG draw, but the encoder output is fixed at Q95 as a single coding-profile probe. Offline MVTec research only; not device calibration or production authorization.",
+  "encoding": {
+    "jpegQualityMax": 98,
+    "jpegQualityMin": 95,
+    "jpegQualityOutputOverride": 95,
+    "jpegQuantizationTablesSha256": "sha256:f67e35fd0dcd2fd9f999077e2aae8560e6327a8477c45427f6ea2e0a224cd187",
+    "jpegSubsampling": "4:2:0"
+  },
+  "geometry": {
+    "maxCornerJitterFraction": 0.002,
+    "maxRotationDegrees": 0.35,
+    "maxScaleDelta": 0.005,
+    "maxTranslationFraction": 0.002
+  },
+  "id": "GENERIC_PHONE_CAPTURE_NORMAL_V5_NARROW_OFF_AXIS_LENS_SHADING_JPEG_420_Q95",
+  "offAxisLensShading": {
+    "maxCenterOffsetFraction": 0.12,
+    "maxStrength": 0.025
+  },
+  "photometry": {
+    "maxExposureEv": 0.1,
+    "maxGammaDelta": 0.025,
+    "maxSensorNoiseStdDn": 0.5,
+    "maxShadingStrength": 0.04,
+    "maxVignetteStrength": 0.025,
+    "maxWhiteBalanceDelta": 0.025
+  },
+  "productionAuthorized": false,
+  "samplingSeedAnchor": "sha256:1f0b49bb26066936a63122cc5c53588f5ad051156243464a31d20dbf03bf653f",
+  "schemaVersion": "phone-dino.mvtec-ad-camera-recipe/1.2"
+}

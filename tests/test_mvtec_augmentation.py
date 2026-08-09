@@ -25,6 +25,7 @@ RECIPE_PATH = REPOSITORY_ROOT / "tools" / "mvtec_ad_camera_lighting_recipe_v1.js
 RECIPE_V2_PATH = REPOSITORY_ROOT / "tools" / "mvtec_ad_camera_lighting_recipe_v2.json"
 RECIPE_V3_PATH = REPOSITORY_ROOT / "tools" / "mvtec_ad_camera_lighting_recipe_v3.json"
 RECIPE_V4_PATH = REPOSITORY_ROOT / "tools" / "mvtec_ad_camera_lighting_recipe_v4.json"
+RECIPE_V5_PATH = REPOSITORY_ROOT / "tools" / "mvtec_ad_camera_lighting_recipe_v5.json"
 
 
 def _sha256(path: Path) -> str:
@@ -66,7 +67,7 @@ def _frozen_manifest(tmp_path: Path) -> Path:
     return manifest_path
 
 
-@pytest.mark.parametrize("recipe_path", [RECIPE_PATH, RECIPE_V2_PATH, RECIPE_V3_PATH, RECIPE_V4_PATH])
+@pytest.mark.parametrize("recipe_path", [RECIPE_PATH, RECIPE_V2_PATH, RECIPE_V3_PATH, RECIPE_V4_PATH, RECIPE_V5_PATH])
 def test_parameters_and_seed_are_stable_without_record_order(recipe_path: Path) -> None:
     recipe, recipe_sha256 = load_camera_recipe(recipe_path)
     first = sample_camera_parameters(
@@ -133,6 +134,7 @@ def test_legacy_recipes_emit_attested_jpeg_444(tmp_path: Path, recipe_path: Path
     }
     for record in generated["records"]:
         actual = _jpeg_encoding(output_dir / str(record["relativePath"]))
+        assert record["outputJpegQuality"] == record["parameters"]["jpegQuality"]
         assert record["outputEncoding"] == actual
         assert {name: actual[name] for name in expected} == expected
         assert str(actual["quantizationTablesSha256"]).startswith("sha256:")
@@ -228,6 +230,29 @@ def test_v4_preserves_every_v3_draw_and_changes_only_jpeg_subsampling() -> None:
         )
 
 
+def test_v5_preserves_every_v4_draw_and_only_fixes_output_quality() -> None:
+    recipe_v4, recipe_v4_sha256 = load_camera_recipe(RECIPE_V4_PATH)
+    recipe_v5, recipe_v5_sha256 = load_camera_recipe(RECIPE_V5_PATH)
+    assert recipe_v5["samplingSeedAnchor"] == recipe_v4["samplingSeedAnchor"]
+    assert recipe_v5["encoding"]["jpegQualityOutputOverride"] == 95
+    sampled_qualities: set[int] = set()
+    for parent_case_id, parent_source_sha256, variant_id in (
+        ("case/fit/001", f"sha256:{'1' * 64}", 1),
+        ("case/fit/002", f"sha256:{'2' * 64}", 4),
+        ("case/tuning/001", f"sha256:{'3' * 64}", 2),
+    ):
+        arguments = {
+            "parent_case_id": parent_case_id,
+            "parent_source_sha256": parent_source_sha256,
+            "variant_id": variant_id,
+        }
+        v4 = sample_camera_parameters(recipe_v4, recipe_sha256=recipe_v4_sha256, **arguments)
+        v5 = sample_camera_parameters(recipe_v5, recipe_sha256=recipe_v5_sha256, **arguments)
+        assert v5 == v4
+        sampled_qualities.add(int(v5["jpegQuality"]))
+    assert any(quality != 95 for quality in sampled_qualities)
+
+
 def test_v4_jpeg_420_manifest_is_attested_and_header_checked(tmp_path: Path) -> None:
     manifest_path = _frozen_manifest(tmp_path)
     output_dir = tmp_path / "outside-v4-r4"
@@ -243,11 +268,12 @@ def test_v4_jpeg_420_manifest_is_attested_and_header_checked(tmp_path: Path) -> 
         "quantizationTableSelectors": [0, 1, 1],
         "progressive": False,
     }
-    assert generated["schemaVersion"] == "phone-dino.mvtec-ad-normal-augmentation/1.2"
+    assert generated["schemaVersion"] == "phone-dino.mvtec-ad-normal-augmentation/1.3"
     assert len(generated["records"]) == 8
     assert {record["role"] for record in generated["records"]} == {"FIT", "THRESHOLD_TUNING"}
     for record in generated["records"]:
         actual = _jpeg_encoding(output_dir / str(record["relativePath"]))
+        assert record["outputJpegQuality"] == record["parameters"]["jpegQuality"]
         assert record["outputEncoding"] == actual
         assert {name: actual[name] for name in expected} == expected
         assert str(actual["quantizationTablesSha256"]).startswith("sha256:")
@@ -305,6 +331,88 @@ def test_v4_jpeg_420_manifest_is_attested_and_header_checked(tmp_path: Path) -> 
     _refresh_augmentation_manifest(progressive_tampered_dir / "augmentation_manifest.json", progressive_tampered)
     with pytest.raises(MvtecResearchError, match="outputEncoding does not match decoded JPEG headers"):
         load_validated_normal_augmentations(progressive_tampered_dir / "augmentation_manifest.json", manifest_path)
+
+
+def test_v5_fixed_q95_output_is_attested_and_rejects_reencoding(tmp_path: Path) -> None:
+    manifest_path = _frozen_manifest(tmp_path)
+    output_dir = tmp_path / "outside-v5-r4"
+    generated = generate_normal_augmentations(
+        manifest_path, RECIPE_V5_PATH, output_dir, variants_per_parent=4, repository_root=tmp_path / "repo"
+    )
+    q95_probe = tmp_path / "q95-probe.jpg"
+    Image.new("RGB", (16, 16), (90, 130, 180)).save(
+        q95_probe, format="JPEG", quality=95, subsampling=2, optimize=False, progressive=False
+    )
+    expected = _jpeg_encoding(q95_probe)
+    assert expected["quantizationTablesSha256"] == generated["recipe"]["encoding"]["jpegQuantizationTablesSha256"]
+    assert generated["schemaVersion"] == "phone-dino.mvtec-ad-normal-augmentation/1.3"
+    assert len(generated["records"]) == 8
+    assert any(int(record["parameters"]["jpegQuality"]) != 95 for record in generated["records"])
+    for record in generated["records"]:
+        assert record["outputJpegQuality"] == 95
+        assert record["outputEncoding"] == expected
+        assert _jpeg_encoding(output_dir / str(record["relativePath"])) == expected
+    _, validated = load_validated_normal_augmentations(output_dir / "augmentation_manifest.json", manifest_path)
+    assert len(validated) == 8
+
+    tampered_dir = tmp_path / "outside-v5-quality-tampered"
+    tampered = generate_normal_augmentations(
+        manifest_path, RECIPE_V5_PATH, tampered_dir, variants_per_parent=1, repository_root=tmp_path / "repo"
+    )
+    tampered_path = tampered_dir / str(tampered["records"][0]["relativePath"])
+    with Image.open(tampered_path) as opened:
+        opened.convert("RGB").save(tampered_path, format="JPEG", quality=96, subsampling=2, optimize=False, progressive=False)
+    tampered["records"][0]["sourceSha256"] = _sha256(tampered_path)
+    _refresh_augmentation_manifest(tampered_dir / "augmentation_manifest.json", tampered)
+    with pytest.raises(MvtecResearchError, match="outputEncoding does not match decoded JPEG headers"):
+        load_validated_normal_augmentations(tampered_dir / "augmentation_manifest.json", manifest_path)
+
+    progressive_dir = tmp_path / "outside-v5-progressive-tampered"
+    progressive = generate_normal_augmentations(
+        manifest_path, RECIPE_V5_PATH, progressive_dir, variants_per_parent=1, repository_root=tmp_path / "repo"
+    )
+    progressive_path = progressive_dir / str(progressive["records"][0]["relativePath"])
+    with Image.open(progressive_path) as opened:
+        opened.convert("RGB").save(
+            progressive_path, format="JPEG", quality=95, subsampling=2, optimize=False, progressive=True
+        )
+    progressive["records"][0]["sourceSha256"] = _sha256(progressive_path)
+    _refresh_augmentation_manifest(progressive_dir / "augmentation_manifest.json", progressive)
+    with pytest.raises(MvtecResearchError, match="outputEncoding does not match decoded JPEG headers"):
+        load_validated_normal_augmentations(progressive_dir / "augmentation_manifest.json", manifest_path)
+
+    wrong_output_quality = json.loads((output_dir / "augmentation_manifest.json").read_text(encoding="utf-8"))
+    wrong_output_quality["records"][0]["outputJpegQuality"] = 96
+    _refresh_augmentation_manifest(output_dir / "augmentation_manifest.json", wrong_output_quality)
+    with pytest.raises(MvtecResearchError, match="outputJpegQuality does not match"):
+        load_validated_normal_augmentations(output_dir / "augmentation_manifest.json", manifest_path)
+
+
+def test_v5_recipe_rejects_changed_q95_profile_or_hidden_encoding_knobs(tmp_path: Path) -> None:
+    def write_recipe(name: str, recipe: dict[str, object]) -> Path:
+        path = tmp_path / name
+        path.write_text(json.dumps(recipe, indent=2) + "\n", encoding="utf-8")
+        return path
+
+    changed_tables = json.loads(RECIPE_V5_PATH.read_text(encoding="utf-8"))
+    changed_tables["encoding"]["jpegQuantizationTablesSha256"] = f"sha256:{'a' * 64}"
+    with pytest.raises(MvtecResearchError, match="fixed Q95 output"):
+        load_camera_recipe(write_recipe("changed-tables.json", changed_tables))
+
+    changed_output_quality = json.loads(RECIPE_V5_PATH.read_text(encoding="utf-8"))
+    changed_output_quality["encoding"]["jpegQualityOutputOverride"] = 96
+    with pytest.raises(MvtecResearchError, match="fixed Q95 output"):
+        load_camera_recipe(write_recipe("changed-output-quality.json", changed_output_quality))
+
+    missing_override = json.loads(RECIPE_V5_PATH.read_text(encoding="utf-8"))
+    del missing_override["encoding"]["jpegQualityOutputOverride"]
+    with pytest.raises(MvtecResearchError, match="missing required fields"):
+        load_camera_recipe(write_recipe("missing-output-quality.json", missing_override))
+
+    hidden_knob = json.loads(RECIPE_V5_PATH.read_text(encoding="utf-8"))
+    hidden_knob["encoding"]["progressive"] = False
+    with pytest.raises(MvtecResearchError, match="unsupported fields"):
+        load_camera_recipe(write_recipe("hidden-encoding-knob.json", hidden_knob))
 
 
 def test_v4_recipe_rejects_hidden_encoding_knobs_and_invalid_subsampling(tmp_path: Path) -> None:
@@ -372,7 +480,7 @@ def test_v3_manifest_requires_full_coverage_and_rederived_parameters(tmp_path: P
         manifest_path, RECIPE_V3_PATH, output_dir, variants_per_parent=1, repository_root=tmp_path / "repo"
     )
     manifest_output = output_dir / "augmentation_manifest.json"
-    assert generated["schemaVersion"] == "phone-dino.mvtec-ad-normal-augmentation/1.2"
+    assert generated["schemaVersion"] == "phone-dino.mvtec-ad-normal-augmentation/1.3"
     assert generated["generation"]["generatorModuleSha256"] == sha256_file(REPOSITORY_ROOT / "src" / "phone_dino" / "mvtec_research.py")
     load_validated_normal_augmentations(manifest_output, manifest_path)
 

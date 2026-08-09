@@ -14,6 +14,7 @@ from phone_dino.mvtec_research import generate_normal_augmentations
 
 REPOSITORY_ROOT = Path(__file__).parents[1]
 RECIPE_V3_PATH = REPOSITORY_ROOT / "tools" / "mvtec_ad_camera_lighting_recipe_v3.json"
+RECIPE_V5_PATH = REPOSITORY_ROOT / "tools" / "mvtec_ad_camera_lighting_recipe_v5.json"
 
 
 def _tool_module():
@@ -340,16 +341,18 @@ def test_normal_only_iteration_never_embeds_blind_inputs(tmp_path: Path, monkeyp
     assert report["candidateConfigurationSha256"] == tool.canonical_json_sha256(report["candidateConfiguration"])
 
 
+@pytest.mark.parametrize("recipe_path", [RECIPE_V3_PATH, RECIPE_V5_PATH])
 def test_normal_only_iteration_reports_all_four_generated_variant_ids(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    recipe_path: Path,
 ) -> None:
     tool = _tool_module()
     manifest_path, _ = _write_normal_only_manifest(tmp_path)
     augmentation_directory = tmp_path / "augmented"
     generate_normal_augmentations(
         manifest_path,
-        RECIPE_V3_PATH,
+        recipe_path,
         augmentation_directory,
         variants_per_parent=4,
         repository_root=tmp_path / "repo",
