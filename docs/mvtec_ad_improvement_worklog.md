@@ -1,7 +1,7 @@
 # MVTec AD research improvement work log
 
 **Status:** implementation, one historical locked-configuration blind
-observation, and two later normal-only configuration locks completed on
+observation, and three later normal-only configuration locks completed on
 2026-08-09. This log is for non-commercial research only. None of the work
 below changes the PhoneDINO service, artifact schema, QR/ChArUco process,
 physical measurement, or any equipment decision.
@@ -296,14 +296,44 @@ loader: they retain their `de55a73` generator identity and must be inspected
 with that pinned worktree, or regenerated as a new envelope. They must not be
 silently upgraded or ranked against V5.
 
-The planned external V5 execution is a new R4 package, new feature cache, and
-new normal-only selection directory. It will first run a 1,024-prototype
-reference with no blind/anomaly/mask input; only then will it freeze the V5
-manifest, feature/calibration identities, and two predeclared candidate
-configurations before running the 2,048-prototype candidate. Every category
-will use normal-only gates: no threshold or original-P95 increase versus the
-reference, plus aggregate and each-variant paired P95/max caps of `0.04`.
-No V3/V4/V5 cross-envelope selection and no new blind report are authorized.
+The V5-R4 package was generated from clean detached `a252de7` at
+`camera_capture_v5_jpeg420_q95_r4_retry1\augmentation_manifest.json`. It has
+768 derivatives (576 FIT and 192 threshold-tuning) with exactly four variants
+per good nominal parent, no masks, no blind records, and the following frozen
+identities: declared manifest
+`sha256:c5de5539313a75eb7db238a548aff35010bf0f2f347851d3beff43ba99b9596d`,
+file `sha256:fbe5e5c3a1c0f301e1539c48b1f6368143b6a6cad03e918cf950c19692d167dc`,
+and recipe
+`sha256:00a970a63994e25d43adb7cf76fc66f1ffb9dbcab7dba26ebdf5fd89b84831dd`.
+The loader revalidated all 768 images before either scoring run; every output
+was Q95 / 4:2:0 with the locked table digest.
+
+The 1,024-prototype reference used a fresh V5 cache (960 misses, 311.15 s) and
+the predeclared 2,048 candidate reused its 960 verified entries (56.39 s).
+Both are normal-only: 960 feature inputs, 240 tuning calibration scores, 48
+original-only reported tuning scores, `blindReporting.state: NOT_RUN`, zero
+blind/anomaly feature inputs, and no pixel metrics. Before the candidate ran,
+the external contract
+`selection_v5_jpeg420_q95_r4\v5_r4_normal_only_contract.json` bound its exact
+membership, feature identity, V5 manifest/recipe, two configurations, and
+four per-variant `0.04` P95/max gates. Its declared digest is
+`sha256:8e27685cc1ab3deb62bd6b11e021c367fef882b060581d74c178ba7f802b33ea`
+(file `sha256:05aab19db6b54288a988df409fa1c55fe2eac0cc92287658d54931aaca103a92`).
+
+| Candidate | Report file digest | Worst paired delta P95 | Worst per-variant delta max | Worst threshold | Mean threshold | Selector result |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| V5-R4 1024 | `sha256:bc3ee27fb541c4dff7069e46f4033d81f6364f0b24e1b934b8225eca7601f171` | 0.03209 | 0.03940 | 0.32250 | 0.29853 | Locked |
+| V5-R4 2048 | `sha256:4ca3dfc657628ed0d95556f2ce6ec4e3be118e32841f5bbf91a959640730cf82` | 0.02556 | 0.03516 | 0.27138 | 0.25931 | Rejected gate |
+
+The JSON-only result at
+`selection_v5_jpeg420_q95_r4\v5_r4_normal_selection.json` has file digest
+`sha256:b667244c4ed24e230d3f6d1fe7f5741c5382f2334d6763c227e241d802536d25`
+and selected `v5-r4-1024`. The 2048 candidate was rejected—not promoted—because
+its tile threshold increased by `0.000540912151337` above the frozen zero
+increase limit. That rejection is retained instead of loosening the contract
+after seeing the data. This is a V5-envelope normal-robustness lock only. No
+V3/V4/V5 cross-envelope selection, new blind report, or anomaly/mask access is
+authorized.
 
 ## Physical readiness audit (2026-08-09)
 
