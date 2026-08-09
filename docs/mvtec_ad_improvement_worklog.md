@@ -505,6 +505,19 @@ P95 excess, then candidate ID. The next action is a separate one-time claim
 and receipt; that action, not contract creation, will authorize the first read
 of raw normal selection inputs.
 
+### Contract registry hardening (before any claim or query read)
+
+The initial non-consuming contract used a sibling claim-slot design. A security
+review found that copying its bytes to another external contract directory
+could create a second tool-mediated slot. No claim, receipt, selection query,
+or confirmation query was created from that contract. The contract/claim
+schema was therefore advanced to `1.1`: it now binds a cohort-wide external
+`partition_access` registry derived from the frozen holdout file and partition
+identity. A copied contract resolves to the same claim/receipt slots. The
+initial schema-1.0 external contract is historical and intentionally rejected
+by the current tool; a new schema-1.1 contract will be frozen before any held-
+out normal image is opened.
+
 ## Physical readiness audit (2026-08-09)
 
 The offline research result was not used as a substitute for a physical-device

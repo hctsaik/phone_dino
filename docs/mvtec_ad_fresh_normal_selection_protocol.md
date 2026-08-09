@@ -32,6 +32,13 @@ It does not prevent a person with direct filesystem access from copying or
 opening those files outside the tool; that stronger boundary requires separate
 ACL or service-account controls.
 
+Consumption slots are not derived from the contract's directory. They are
+derived from the frozen holdout manifest's external `partition_access` registry
+and the manifest file digest, declared digest, and partition identity. Thus a
+copy of the same valid contract in another directory reaches the same claim,
+receipt, observation, and lock slots rather than authorizing a second
+tool-mediated read.
+
 ## Frozen selection inputs
 
 A selection contract binds all of the following with both raw-file and declared

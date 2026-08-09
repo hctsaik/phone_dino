@@ -23,15 +23,16 @@ from phone_dino import mvtec_normal_holdout_evaluator as evaluator
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-FRESH_NORMAL_SELECTION_CONTRACT_SCHEMA = "phone-dino.mvtec-ad-fresh-normal-selection-contract/1.0"
-FRESH_NORMAL_SELECTION_CLAIM_SCHEMA = "phone-dino.mvtec-ad-fresh-normal-selection-claim/1.0"
+FRESH_NORMAL_SELECTION_CONTRACT_SCHEMA = "phone-dino.mvtec-ad-fresh-normal-selection-contract/1.1"
+FRESH_NORMAL_SELECTION_CLAIM_SCHEMA = "phone-dino.mvtec-ad-fresh-normal-selection-claim/1.1"
 FRESH_NORMAL_SELECTION_CONTRACT_PURPOSE = "OFFLINE_MVTEC_FRESH_NORMAL_SELECTION_CONTRACT"
 FRESH_NORMAL_SELECTION_CLAIM_PURPOSE = "OFFLINE_MVTEC_FRESH_NORMAL_SELECTION_CLAIM"
 FRESH_NORMAL_SELECTION_CONTRACT_PHASE = "NORMAL_SELECTION_CONTRACT"
 FRESH_NORMAL_SELECTION_CLAIM_PHASE = "NORMAL_SELECTION_CLAIM"
 FRESH_NORMAL_SELECTION_BLIND_POLICY = "NO_BLIND_OR_ANOMALY_DATA"
 FRESH_NORMAL_SELECTION_CLAIM_SLOT = "FRESH_NORMAL_SELECTION_CONSUMPTION_V1"
-FRESH_NORMAL_SELECTION_CLAIM_FILENAME = "fresh_normal_selection_claim.json"
+FRESH_NORMAL_CONSUMPTION_REGISTRY_SCHEMA = "phone-dino.mvtec-ad-fresh-normal-consumption-registry/1.0"
+FRESH_NORMAL_CONSUMPTION_REGISTRY_DIRECTORY = "partition_access"
 
 FRESH_NORMAL_SELECTION_INPUT = {
     "partition": "NORMAL_SELECTION",
@@ -67,6 +68,7 @@ CONTRACT_FIELDS = {
     "decisionPolicy",
     "holdout",
     "augmentation",
+    "consumptionRegistry",
     "normalSelectionInputs",
     "normalSelectionInputIdentitySha256",
     "normalConfirmationInputs",
@@ -112,6 +114,12 @@ AUGMENTATION_BINDING_FIELDS = {
     "fitParentIdentitySha256",
     "recipeFileSha256",
     "variantsPerParent",
+}
+CONSUMPTION_REGISTRY_FIELDS = {
+    "schemaVersion",
+    "root",
+    "selectionSlotKey",
+    "confirmationSlotKey",
 }
 CANDIDATE_REPORT_BINDING_FIELDS = {
     "candidateId",
@@ -366,6 +374,113 @@ def _write_external_json(path: Path, document: dict[str, Any], *, description: s
             stream.write(payload)
     except OSError as error:
         raise FreshNormalSelectionError(f"unable to write immutable {description}") from error
+
+
+def _consumption_slot_key(*, holdout: dict[str, Any], partition: str) -> str:
+    identity_name = {
+        "NORMAL_SELECTION": "normalSelectionIdentitySha256",
+        "NORMAL_CONFIRMATION": "normalConfirmationIdentitySha256",
+    }.get(partition)
+    if identity_name is None:
+        raise FreshNormalSelectionError("normal consumption registry partition is unsupported")
+    return canonical_json_sha256({
+        "schemaVersion": FRESH_NORMAL_CONSUMPTION_REGISTRY_SCHEMA,
+        "holdoutManifestFileSha256": holdout["manifestFileSha256"],
+        "holdoutManifestDeclaredSha256": holdout["manifestDeclaredSha256"],
+        "partition": partition,
+        "partitionIdentitySha256": holdout[identity_name],
+    })
+
+
+def _consumption_registry_for_holdout(
+    holdout_manifest_path: Path,
+    *,
+    holdout_binding: dict[str, Any],
+    repository_root: Path,
+) -> dict[str, Any]:
+    """Derive the one shared consumption registry for a frozen cohort.
+
+    The directory is intentionally anchored to the canonical holdout manifest,
+    not a caller-chosen contract directory. Copying a valid contract therefore
+    cannot manufacture another tool-mediated selection/confirmation slot.
+    """
+
+    _require_external_file(
+        holdout_manifest_path,
+        description="fresh normal holdout manifest",
+        repository_root=repository_root,
+    )
+    root = (holdout_manifest_path.parent / FRESH_NORMAL_CONSUMPTION_REGISTRY_DIRECTORY).resolve()
+    if _is_under(repository_root, root) or _is_under(root, repository_root):
+        raise FreshNormalSelectionError("normal consumption registry must stay outside the Git working tree")
+    if (root.exists() or root.is_symlink()) and _is_link_or_reparse_point(root):
+        raise FreshNormalSelectionError("normal consumption registry contains a symbolic link or reparse point")
+    _reject_links_on_existing_path(root.parent, description="normal consumption registry")
+    return {
+        "schemaVersion": FRESH_NORMAL_CONSUMPTION_REGISTRY_SCHEMA,
+        "root": str(root),
+        "selectionSlotKey": _consumption_slot_key(holdout=holdout_binding, partition="NORMAL_SELECTION"),
+        "confirmationSlotKey": _consumption_slot_key(holdout=holdout_binding, partition="NORMAL_CONFIRMATION"),
+    }
+
+
+def _validate_consumption_registry(
+    value: object,
+    *,
+    holdout_binding: dict[str, Any],
+    repository_root: Path,
+) -> dict[str, Any]:
+    document = _require_mapping(value, name="normal consumption registry")
+    _require_exact_fields(document, name="normal consumption registry", required=CONSUMPTION_REGISTRY_FIELDS)
+    if document.get("schemaVersion") != FRESH_NORMAL_CONSUMPTION_REGISTRY_SCHEMA:
+        raise FreshNormalSelectionError("normal consumption registry schema is unsupported")
+    root_value = _require_string(document.get("root"), name="normal consumption registry root")
+    root = Path(root_value)
+    if not root.is_absolute() or _is_under(repository_root, root) or _is_under(root, repository_root):
+        raise FreshNormalSelectionError("normal consumption registry root must be an external absolute path")
+    if (root.exists() or root.is_symlink()) and _is_link_or_reparse_point(root):
+        raise FreshNormalSelectionError("normal consumption registry contains a symbolic link or reparse point")
+    _reject_links_on_existing_path(root.parent, description="normal consumption registry")
+    expected = {
+        "selectionSlotKey": _consumption_slot_key(holdout=holdout_binding, partition="NORMAL_SELECTION"),
+        "confirmationSlotKey": _consumption_slot_key(holdout=holdout_binding, partition="NORMAL_CONFIRMATION"),
+    }
+    result = {"schemaVersion": FRESH_NORMAL_CONSUMPTION_REGISTRY_SCHEMA, "root": str(root.resolve())}
+    for field, expected_value in expected.items():
+        actual = _require_sha256(document.get(field), name=f"normal consumption registry {field}")
+        if actual != expected_value:
+            raise FreshNormalSelectionError(f"normal consumption registry {field} does not match the frozen holdout")
+        result[field] = actual
+    return result
+
+
+def fresh_normal_consumption_path(
+    contract: dict[str, Any],
+    *,
+    partition: str,
+    artifact: str,
+    repository_root: Path = REPOSITORY_ROOT,
+) -> Path:
+    """Return a fixed cohort-wide artifact path for a consumed partition."""
+
+    _validate_contract_document(contract, repository_root=repository_root)
+    registry = _validate_consumption_registry(
+        contract["consumptionRegistry"],
+        holdout_binding=contract["holdout"],
+        repository_root=repository_root,
+    )
+    slot_field = {
+        "NORMAL_SELECTION": "selectionSlotKey",
+        "NORMAL_CONFIRMATION": "confirmationSlotKey",
+    }.get(partition)
+    supported_artifacts = {
+        "NORMAL_SELECTION": {"claim", "receipt", "observation", "lock"},
+        "NORMAL_CONFIRMATION": {"claim", "receipt", "observation"},
+    }
+    if slot_field is None or artifact not in supported_artifacts[partition]:
+        raise FreshNormalSelectionError("normal consumption artifact is unsupported")
+    slug = "selection" if partition == "NORMAL_SELECTION" else "confirmation"
+    return Path(registry["root"]) / f"{slug}--{registry[slot_field][7:]}.{artifact}.json"
 
 
 def _require_static_scope(
@@ -1078,7 +1193,11 @@ def _validate_candidate_binding(value: object) -> dict[str, Any]:
     return result
 
 
-def _validate_contract_document(document: dict[str, Any]) -> dict[str, Any]:
+def _validate_contract_document(
+    document: dict[str, Any],
+    *,
+    repository_root: Path = REPOSITORY_ROOT,
+) -> dict[str, Any]:
     _require_exact_fields(document, name="fresh normal selection contract", required=CONTRACT_FIELDS)
     _require_static_scope(
         document,
@@ -1093,6 +1212,11 @@ def _validate_contract_document(document: dict[str, Any]) -> dict[str, Any]:
     augmentation_binding = _validate_augmentation_binding(document.get("augmentation"))
     if augmentation_binding["developmentIdentitySha256"] != holdout_binding["developmentIdentitySha256"]:
         raise FreshNormalSelectionError("selection contract augmentation is not bound to the development holdout")
+    _validate_consumption_registry(
+        document.get("consumptionRegistry"),
+        holdout_binding=holdout_binding,
+        repository_root=repository_root,
+    )
     selection_inputs = _validate_normal_partition_inputs(
         document.get("normalSelectionInputs"),
         partition="NORMAL_SELECTION",
@@ -1154,7 +1278,7 @@ def load_validated_fresh_selection_contract(
         description="fresh normal selection contract",
         repository_root=repository_root,
     )
-    return _validate_contract_document(document), file_sha256
+    return _validate_contract_document(document, repository_root=repository_root), file_sha256
 
 
 def create_fresh_normal_selection_contract(
@@ -1239,6 +1363,11 @@ def create_fresh_normal_selection_contract(
         raise FreshNormalSelectionError("development reports do not share one frozen development input set")
     gates = _validate_selection_gates(selection_gates)
     objective = _validate_selection_objective(selection_objective)
+    consumption_registry = _consumption_registry_for_holdout(
+        holdout_manifest_path,
+        holdout_binding=holdout_binding,
+        repository_root=repository_root,
+    )
     contract: dict[str, Any] = {
         "schemaVersion": FRESH_NORMAL_SELECTION_CONTRACT_SCHEMA,
         "authoritative": False,
@@ -1250,6 +1379,7 @@ def create_fresh_normal_selection_contract(
         "decisionPolicy": dict(FRESH_NORMAL_SELECTION_DECISION_POLICY),
         "holdout": holdout_binding,
         "augmentation": augmentation_binding,
+        "consumptionRegistry": consumption_registry,
         "normalSelectionInputs": selection_inputs,
         "normalSelectionInputIdentitySha256": canonical_json_sha256(selection_inputs),
         "normalConfirmationInputs": confirmation_inputs,
@@ -1262,7 +1392,7 @@ def create_fresh_normal_selection_contract(
         "selectionObjective": objective,
     }
     contract["contractSha256"] = _document_digest(contract, "contractSha256")
-    _validate_contract_document(contract)
+    _validate_contract_document(contract, repository_root=repository_root)
     _write_external_json(
         output_path,
         contract,
@@ -1272,12 +1402,19 @@ def create_fresh_normal_selection_contract(
     return contract
 
 
-def fresh_selection_claim_path(contract_path: Path) -> Path:
-    """Return the sole claim slot associated with an immutable contract path."""
+def fresh_selection_claim_path(
+    contract: dict[str, Any],
+    *,
+    repository_root: Path = REPOSITORY_ROOT,
+) -> Path:
+    """Return the cohort-wide selection claim slot bound into a contract."""
 
-    if not isinstance(contract_path, Path):
-        raise FreshNormalSelectionError("contract path must be a Path")
-    return contract_path.parent / FRESH_NORMAL_SELECTION_CLAIM_FILENAME
+    return fresh_normal_consumption_path(
+        contract,
+        partition="NORMAL_SELECTION",
+        artifact="claim",
+        repository_root=repository_root,
+    )
 
 
 def _validate_claim_document(document: dict[str, Any]) -> dict[str, Any]:
@@ -1349,8 +1486,9 @@ def validate_fresh_selection_claim_binding(
     if (contract_path is None) != (claim_path is None):
         raise FreshNormalSelectionError("contract_path and claim_path must be supplied together")
     if contract_path is not None and claim_path is not None:
-        if claim_path.resolve() != fresh_selection_claim_path(contract_path).resolve():
-            raise FreshNormalSelectionError("selection claim is not stored in the contract's fixed claim slot")
+        expected_path = fresh_selection_claim_path(contract)
+        if claim_path.resolve() != expected_path.resolve():
+            raise FreshNormalSelectionError("selection claim is not stored in the cohort-wide fixed claim slot")
 
 
 def create_fresh_normal_selection_claim(
@@ -1368,7 +1506,7 @@ def create_fresh_normal_selection_claim(
         contract_path,
         repository_root=repository_root,
     )
-    claim_path = fresh_selection_claim_path(contract_path)
+    claim_path = fresh_selection_claim_path(contract, repository_root=repository_root)
     claim: dict[str, Any] = {
         "schemaVersion": FRESH_NORMAL_SELECTION_CLAIM_SCHEMA,
         "authoritative": False,
@@ -1407,7 +1545,7 @@ def load_validated_fresh_selection_claim_for_contract(
         contract_path,
         repository_root=repository_root,
     )
-    claim_path = fresh_selection_claim_path(contract_path)
+    claim_path = fresh_selection_claim_path(contract, repository_root=repository_root)
     claim, claim_file_sha256 = load_validated_fresh_selection_claim(
         claim_path,
         repository_root=repository_root,

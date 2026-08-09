@@ -15,6 +15,7 @@ if str(REPOSITORY_ROOT / "src") not in sys.path:
 from phone_dino.mvtec_fresh_normal_selection import (  # noqa: E402
     create_fresh_normal_selection_claim,
     fresh_selection_claim_path,
+    load_validated_fresh_selection_contract,
 )
 
 
@@ -25,8 +26,9 @@ def main() -> None:
     parser.add_argument("--contract", required=True, type=Path)
     arguments = parser.parse_args()
     claim = create_fresh_normal_selection_claim(arguments.contract)
+    contract, _ = load_validated_fresh_selection_contract(arguments.contract)
     print(json.dumps({
-        "output": str(fresh_selection_claim_path(arguments.contract)),
+        "output": str(fresh_selection_claim_path(contract)),
         "claimSha256": claim["claimSha256"],
         "contractDeclaredSha256": claim["contractDeclaredSha256"],
     }, indent=2))

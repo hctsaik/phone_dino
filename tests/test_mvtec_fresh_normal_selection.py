@@ -195,7 +195,7 @@ def test_contract_and_fixed_claim_are_json_only_and_bind_the_frozen_inputs(tmp_p
     assert report_file_sha256 == selection.sha256_file(first_report)
 
     claim = selection.create_fresh_normal_selection_claim(contract_path)
-    claim_path = selection.fresh_selection_claim_path(contract_path)
+    claim_path = selection.fresh_selection_claim_path(contract)
     assert claim_path.is_file()
     loaded_claim, claim_file_sha256 = selection.load_validated_fresh_selection_claim_for_contract(contract_path)
     assert loaded_claim == claim
@@ -209,6 +209,49 @@ def test_contract_and_fixed_claim_are_json_only_and_bind_the_frozen_inputs(tmp_p
     )
     with pytest.raises(selection.FreshNormalSelectionError, match="already exists"):
         selection.create_fresh_normal_selection_claim(contract_path)
+
+
+def test_copied_contract_cannot_create_another_selection_claim_slot(tmp_path: Path) -> None:
+    holdout_path, augmentation_manifest, first_report, second_report, _ = _development_reports(tmp_path)
+    contract_path = tmp_path / "selection" / "fresh_normal_selection_contract.json"
+    contract = selection.create_fresh_normal_selection_contract(
+        holdout_path,
+        augmentation_manifest,
+        [first_report, second_report],
+        contract_path,
+        selection_gates=_gates(),
+        selection_objective=_objective(),
+    )
+    expected_claim_path = selection.fresh_selection_claim_path(contract)
+    assert expected_claim_path.parent == holdout_path.parent / "partition_access"
+    expected_receipt_path = selection.fresh_normal_consumption_path(
+        contract,
+        partition="NORMAL_SELECTION",
+        artifact="receipt",
+    )
+    second_contract_path = tmp_path / "other_contract" / "fresh_normal_selection_contract.json"
+    second_contract = selection.create_fresh_normal_selection_contract(
+        holdout_path,
+        augmentation_manifest,
+        [first_report, second_report],
+        second_contract_path,
+        selection_gates=_gates(),
+        selection_objective=_objective(),
+    )
+    assert selection.fresh_selection_claim_path(second_contract) == expected_claim_path
+    assert selection.fresh_normal_consumption_path(
+        second_contract,
+        partition="NORMAL_SELECTION",
+        artifact="receipt",
+    ) == expected_receipt_path
+    selection.create_fresh_normal_selection_claim(contract_path)
+    copied_contract = tmp_path / "copied_contract" / "fresh_normal_selection_contract.json"
+    copied_contract.parent.mkdir(parents=True, exist_ok=True)
+    copied_contract.write_bytes(contract_path.read_bytes())
+    with pytest.raises(selection.FreshNormalSelectionError, match="already exists"):
+        selection.create_fresh_normal_selection_claim(copied_contract)
+    with pytest.raises(selection.FreshNormalSelectionError, match="already exists"):
+        selection.create_fresh_normal_selection_claim(second_contract_path)
 
 
 def test_contract_rejects_missing_gates_and_duplicate_json_keys(tmp_path: Path) -> None:
@@ -227,3 +270,44 @@ def test_contract_rejects_missing_gates_and_duplicate_json_keys(tmp_path: Path) 
     duplicate.write_text('{"schemaVersion":"one","schemaVersion":"two"}', encoding="utf-8")
     with pytest.raises(selection.FreshNormalSelectionError, match="duplicate JSON key"):
         selection.load_validated_fresh_selection_contract(duplicate)
+
+
+def test_legacy_sibling_slot_contract_schema_is_rejected(tmp_path: Path) -> None:
+    holdout_path, augmentation_manifest, first_report, second_report, _ = _development_reports(tmp_path)
+    contract_path = tmp_path / "selection" / "fresh_normal_selection_contract.json"
+    contract = selection.create_fresh_normal_selection_contract(
+        holdout_path,
+        augmentation_manifest,
+        [first_report, second_report],
+        contract_path,
+        selection_gates=_gates(),
+        selection_objective=_objective(),
+    )
+    legacy = dict(contract)
+    legacy["schemaVersion"] = "phone-dino.mvtec-ad-fresh-normal-selection-contract/1.0"
+    legacy["contractSha256"] = selection._document_digest(legacy, "contractSha256")
+    legacy_path = tmp_path / "legacy" / "fresh_normal_selection_contract.json"
+    _write_json(legacy_path, legacy)
+    with pytest.raises(selection.FreshNormalSelectionError, match="schema is unsupported"):
+        selection.load_validated_fresh_selection_contract(legacy_path)
+
+
+def test_registry_reparse_is_rejected_before_contract_writes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    holdout_path, augmentation_manifest, first_report, second_report, _ = _development_reports(tmp_path)
+    registry_root = holdout_path.parent / "partition_access"
+    registry_root.mkdir()
+    original = selection._is_link_or_reparse_point
+
+    def simulated_reparse(path: Path) -> bool:
+        return path == registry_root or original(path)
+
+    monkeypatch.setattr(selection, "_is_link_or_reparse_point", simulated_reparse)
+    with pytest.raises(selection.FreshNormalSelectionError, match="registry contains a symbolic link"):
+        selection.create_fresh_normal_selection_contract(
+            holdout_path,
+            augmentation_manifest,
+            [first_report, second_report],
+            tmp_path / "selection" / "fresh_normal_selection_contract.json",
+            selection_gates=_gates(),
+            selection_objective=_objective(),
+        )
