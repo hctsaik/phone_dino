@@ -1,0 +1,43 @@
+{
+  "authoritative": false,
+  "calibrationEvidence": {
+    "state": "GENERIC_PRIOR_NOT_DEVICE_CALIBRATED"
+  },
+  "componentProfiles": {
+    "illumination": {
+      "maxDirectionalShadingStrength": 0.04,
+      "maxExposureEv": 0.1,
+      "maxGammaDelta": 0.025,
+      "maxLensCenterOffsetFraction": 0.12,
+      "maxLensShadingStrength": 0.025,
+      "maxVignetteStrength": 0.025,
+      "maxWhiteBalanceDelta": 0.025
+    },
+    "registration": {
+      "maxCornerJitterFraction": 0.002,
+      "maxGaussianBlurSigmaPixels": 0.2,
+      "maxRotationDegrees": 0.35,
+      "maxScaleDelta": 0.005,
+      "maxTranslationFraction": 0.002
+    },
+    "sensor_transport": {
+      "maxGaussianBlurSigmaPixels": 0.2,
+      "maxReadNoiseStdDn": 0.35,
+      "maxShotNoiseStdDnAtFullScale": 0.35,
+      "minDownUpSamplingScale": 0.99
+    }
+  },
+  "description": "Closed V2 successor FIT-only component-separated generic camera prior: R3 registration, illumination, and sensor_transport variants. It is generic and non-device-calibrated; it excludes crops, flips, glare, synthetic defects, masks, and capture rejection, and uses fixed RGB JPEG 4:2:0 Q95. Q95 is retained only from the available engineering still coding profile; it does not establish deployed-camera calibration or production authorization.",
+  "id": "RESERVE_SUCCESSOR_V2_GENERIC_FIT_CAMERA_R3_420_Q95",
+  "outputEncoding": {
+    "format": "JPEG",
+    "jpegQuality": 95,
+    "jpegQuantizationTablesSha256": "sha256:f67e35fd0dcd2fd9f999077e2aae8560e6327a8477c45427f6ea2e0a224cd187",
+    "jpegSubsampling": "4:2:0",
+    "progressive": false
+  },
+  "productionAuthorized": false,
+  "purpose": "OFFLINE_MVTEC_RESERVE_SUCCESSOR_V2_FIT_AUGMENTATION_ONLY",
+  "samplingAlgorithm": "NAMED_SHA256_COMPONENT_SUBSTREAMS_V2",
+  "schemaVersion": "phone-dino.mvtec-ad-reserve-successor-fit-camera-recipe/2.0"
+}
