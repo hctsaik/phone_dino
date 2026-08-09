@@ -42,6 +42,26 @@ registry. They are created with new-only atomic writes. A receipt is written
 before the first query image is opened; a failed run therefore burns that
 tool-mediated partition rather than allowing a retry.
 
+Create the three JSON-only foundation artifacts in this order. None of these
+commands accepts a source-image root or opens image bytes:
+
+```powershell
+.venv\Scripts\python.exe tools\create_mvtec_ad_fresh_normal_successor_seal.py `
+  --parent-holdout <external-v1-normal_holdout.json> `
+  --parent-selection-contract <external-v1-schema-1.1-contract.json>
+
+.venv\Scripts\python.exe tools\create_mvtec_ad_fresh_normal_successor_plan.py `
+  --parent-holdout <external-v1-normal_holdout.json> `
+  --parent-selection-contract <external-v1-schema-1.1-contract.json> `
+  --output <new-external-successor-plan.json>
+
+.venv\Scripts\python.exe tools\create_mvtec_ad_fresh_normal_successor_envelope.py `
+  --parent-holdout <external-v1-normal_holdout.json> `
+  --parent-selection-contract <external-v1-schema-1.1-contract.json> `
+  --plan <external-successor-plan.json> `
+  --output <new-external-successor-envelope.json>
+```
+
 ## Successor reserve allocation
 
 The parent reserve has 93 raw normal images. The successor plan consumes only
