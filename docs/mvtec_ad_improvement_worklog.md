@@ -518,6 +518,18 @@ initial schema-1.0 external contract is historical and intentionally rejected
 by the current tool; a new schema-1.1 contract will be frozen before any held-
 out normal image is opened.
 
+The replacement schema-1.1 contract was then frozen at
+`fresh_normal_holdout_v1\selection_protocol_v2\fresh_normal_selection_contract.json`,
+still before any claim/receipt/query read. Its file digest is
+`sha256:8d9aa3d04b1c2825e983cde22e177bf1bf771625fa7ca9af6ba956350af0509d`
+and its declared digest is
+`sha256:dcbf4ddd4ba9c1b3bb62b1f3af3bff301989dad7564c5ab0915fbccc28e33416`.
+Its fixed selection slot is derived under the frozen cohort's
+`partition_access` root with key
+`sha256:ade1705aa03fdd84090208ac8d32cdcf317005a9c33867400bf89a0cf8527f03`;
+the confirmation key is
+`sha256:9d7c4d0d512dc0e37cf6008f8d2389c5cc845b7d5487cd01857a534a8b43c110`.
+
 ## Physical readiness audit (2026-08-09)
 
 The offline research result was not used as a substitute for a physical-device
