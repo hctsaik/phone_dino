@@ -566,6 +566,38 @@ These results describe normal robustness under this generic augmentation
 envelope only. They do not establish anomaly-detection improvement or a
 production threshold.
 
+## Reserve-successor V2 pre-registration (2026-08-09)
+
+The V1 selection partition is permanently consumed and cannot be retuned. No
+new independently auditable source cohort is locally available: the remaining
+parent source directory has no read audit or exclusive access control. The
+next research stage is therefore explicitly limited to a
+`TOOL_MEDIATED_UNCONSUMED_ONLY` successor envelope, not presented as an
+independent or human-unseen validation cohort.
+
+Only the 93 parent `RESERVE_UNTOUCHED` raw-normal records may be delegated to
+the successor's development and selection phases. The 96 parent
+`NORMAL_CONFIRMATION` records remain unopened and may only be used once after
+an eligible successor lock. The frozen reserve allocation is 12 FIT, 4 raw
+tuning, and 8 raw selection records per category, leaving 3 / 4 / 14 reserve
+records unopened for capsule / metal_nut / tile.
+
+The pre-registered V2 candidate universe has one raw-FIT baseline and three
+generic camera-simulation candidates. It uses a true nested 1,024/2,048-patch
+prototype selector and a limited top-K ablation (K=3 or 5). V2 separates
+registration, illumination, and sensor/transport perturbations into three
+deterministic FIT-only derivatives rather than combining every effect in every
+variant. It retains fixed RGB JPEG 4:2:0 Q95, is explicitly generic rather
+than device-calibrated, and excludes crop, flip, glare, occlusion, synthetic
+defects, and capture-reject simulation.
+
+The small-sample screen is frozen before selection: at most one of eight raw
+selection scores per category may exceed the four-score raw-tuning maximum,
+and both the P95 and maximum excess must be at most 0.05. No candidate can
+change a threshold, gate, recipe, model, or confirmation state automatically.
+The full boundary and required safety tests are in
+[`mvtec_ad_reserve_successor_v2_protocol.md`](mvtec_ad_reserve_successor_v2_protocol.md).
+
 ## Physical readiness audit (2026-08-09)
 
 The offline research result was not used as a substitute for a physical-device
