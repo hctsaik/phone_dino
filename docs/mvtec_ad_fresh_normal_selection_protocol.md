@@ -86,11 +86,14 @@ receipt immediately before it does so.
 ## Selection observation
 
 Before consuming selection, the evaluator validates the frozen JSON bindings,
-loads only raw `FIT` plus the verified FIT derivatives to form prototypes, and
-checks the current feature-extractor identity against every development report.
-It then creates the receipt and opens only raw `NORMAL_SELECTION` normals.
-It never reopens tuning, confirmation, reserve, pool, ledger, public dataset
-metadata, blind, anomaly, or mask data.
+validates the full closed normal-only holdout manifest metadata, uses only raw
+`FIT` plus verified FIT-derivative image bytes to form prototypes, and checks
+the current feature-extractor identity against every development report. The
+closed manifest contains normal records only; it is not the public source
+inventory and contains no blind/anomaly/mask rows. It then creates the receipt
+and opens image bytes only for raw `NORMAL_SELECTION` normals. It never opens
+tuning, confirmation, reserve, pool, ledger, public dataset metadata, blind,
+anomaly, or mask **image bytes**.
 
 For each category and candidate, the raw-tuning threshold is copied from the
 validated development report. The observation records only source identities
@@ -104,13 +107,33 @@ maxExcess = max(selection scores) - frozen threshold
 
 All candidates in a contract must use the same inference batch size. Batch
 size is an execution setting rather than a selection objective, and this
-constraint guarantees that the aggregate observer decodes and embeds each
-held-out query exactly once before scoring every frozen candidate in memory.
+constraint guarantees that the aggregate observer does not repeat a held-out
+query's verification/inference sequence per candidate. Each query undergoes
+one decodability-verification decode and one inference decode in the single
+tool invocation, then its in-memory features score every frozen candidate.
 
 The JSON-only lock recomputes every score summary and gate from the observation
 records. It can emit `RESEARCH_CONFIGURATION_LOCKED` or
 `NO_ELIGIBLE_CONFIGURATION`, but it never promotes a configuration, changes a
 runtime setting, or launches confirmation.
+
+After the separate selection claim exists, the following command writes the
+cohort-wide receipt and observation to their predetermined registry slots; it
+does not accept a caller-chosen output location:
+
+```powershell
+.venv\Scripts\python.exe tools\run_mvtec_ad_fresh_normal_selection_observation.py `
+  --contract <external-selection-contract.json> `
+  --holdout <external-normal_holdout.json> `
+  --source-root <external-source-bytes> `
+  --augmentation-manifest <external-fresh-fit-augmentation_manifest.json> `
+  --recipe tools\mvtec_ad_fresh_fit_camera_recipe_v1.json
+
+.venv\Scripts\python.exe tools\create_mvtec_ad_fresh_normal_selection_lock.py `
+  --contract <external-selection-contract.json>
+```
+
+The second command is JSON-only. It does not create a confirmation claim.
 
 ## Confirmation observation
 
@@ -118,9 +141,26 @@ Confirmation is a separate explicit action after a locked research
 configuration. Its claim binds the lock, candidate, development report,
 frozen threshold, and `NORMAL_CONFIRMATION` identity. After a new atomic
 receipt, the evaluator opens only raw `FIT`, validated FIT derivatives, and
-raw `NORMAL_CONFIRMATION` normals. It does not revisit selection or tuning.
+raw `NORMAL_CONFIRMATION` normal image bytes. It revalidates the same closed
+normal-only manifest metadata but does not revisit selection or tuning image
+bytes.
 
 The result is permanently labelled
 `OBSERVATION_ONLY_NO_CONFIGURATION_CHANGE_OR_PROMOTION`. It has no winner,
 no follow-on selector, and no authority beyond reporting the bounded
 normal-input observation.
+
+If and only if the JSON lock is `RESEARCH_CONFIGURATION_LOCKED`, confirmation
+requires a separate explicit claim and then a separate observation command:
+
+```powershell
+.venv\Scripts\python.exe tools\create_mvtec_ad_fresh_normal_confirmation_claim.py `
+  --contract <external-selection-contract.json>
+
+.venv\Scripts\python.exe tools\run_mvtec_ad_fresh_normal_confirmation_observation.py `
+  --contract <external-selection-contract.json> `
+  --holdout <external-normal_holdout.json> `
+  --source-root <external-source-bytes> `
+  --augmentation-manifest <external-fresh-fit-augmentation_manifest.json> `
+  --recipe tools\mvtec_ad_fresh_fit_camera_recipe_v1.json
+```
