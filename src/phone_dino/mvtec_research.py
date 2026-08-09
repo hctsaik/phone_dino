@@ -15,16 +15,37 @@ import platform
 import random
 import subprocess
 import sys
+from functools import lru_cache
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, __version__ as PILLOW_VERSION
+from PIL import Image, JpegImagePlugin, __version__ as PILLOW_VERSION
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-CAMERA_AUGMENTATION_SCHEMA = "phone-dino.mvtec-ad-normal-augmentation/1.1"
-CAMERA_RECIPE_SCHEMA = "phone-dino.mvtec-ad-camera-recipe/1.0"
+CAMERA_AUGMENTATION_SCHEMA = "phone-dino.mvtec-ad-normal-augmentation/1.2"
+CAMERA_RECIPE_SCHEMA = "phone-dino.mvtec-ad-camera-recipe/1.1"
+LEGACY_CAMERA_RECIPE_SCHEMA = "phone-dino.mvtec-ad-camera-recipe/1.0"
 NORMAL_AUGMENTATION_ROLES = frozenset({"FIT", "THRESHOLD_TUNING"})
+V4_RECIPE_ID = "GENERIC_PHONE_CAPTURE_NORMAL_V4_NARROW_OFF_AXIS_LENS_SHADING_JPEG_420"
+V4_SAMPLING_SEED_ANCHOR = "sha256:1f0b49bb26066936a63122cc5c53588f5ad051156243464a31d20dbf03bf653f"
+V4_BASELINE_GEOMETRY = {
+    "maxCornerJitterFraction": 0.002,
+    "maxRotationDegrees": 0.35,
+    "maxScaleDelta": 0.005,
+    "maxTranslationFraction": 0.002,
+}
+V4_BASELINE_PHOTOMETRY = {
+    "maxExposureEv": 0.1,
+    "maxGammaDelta": 0.025,
+    "maxSensorNoiseStdDn": 0.5,
+    "maxShadingStrength": 0.04,
+    "maxVignetteStrength": 0.025,
+    "maxWhiteBalanceDelta": 0.025,
+}
+V4_BASELINE_ENCODING_QUALITY = {"jpegQualityMin": 95, "jpegQualityMax": 98}
+V4_BASELINE_LENS_SHADING = {"maxCenterOffsetFraction": 0.12, "maxStrength": 0.025}
 
 
 class MvtecResearchError(ValueError):
@@ -67,6 +88,17 @@ def _require_mapping(document: dict[str, Any], name: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise MvtecResearchError(f"{name} must be an object")
     return value
+
+
+def _require_exact_fields(
+    document: dict[str, Any], *, name: str, required: frozenset[str], optional: frozenset[str] = frozenset()
+) -> None:
+    missing = required.difference(document)
+    if missing:
+        raise MvtecResearchError(f"{name} is missing required fields: {', '.join(sorted(missing))}")
+    unknown = set(document).difference(required | optional)
+    if unknown:
+        raise MvtecResearchError(f"{name} has unsupported fields: {', '.join(sorted(unknown))}")
 
 
 def _require_finite_number(document: dict[str, Any], name: str) -> float:
@@ -153,6 +185,203 @@ def _generator_provenance() -> dict[str, Any]:
     }
 
 
+def _output_encoding_profile(recipe: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    """Return the only JPEG encoding profile approved for a validated recipe."""
+
+    schema_version = recipe.get("schemaVersion")
+    if schema_version == LEGACY_CAMERA_RECIPE_SCHEMA:
+        subsampling = "4:4:4"
+    elif schema_version == CAMERA_RECIPE_SCHEMA:
+        encoding = _require_mapping(recipe, "encoding")
+        subsampling = _require_string(encoding, "jpegSubsampling")
+    else:
+        raise MvtecResearchError("unsupported camera augmentation recipe schema")
+    profiles = {
+        "4:4:4": (
+            0,
+            {
+                "format": "JPEG",
+                "mode": "RGB",
+                "subsampling": "4:4:4",
+                "componentIds": [1, 2, 3],
+                "samplingFactors": [[1, 1], [1, 1], [1, 1]],
+                "quantizationTableSelectors": [0, 1, 1],
+                "progressive": False,
+            },
+        ),
+        "4:2:0": (
+            2,
+            {
+                "format": "JPEG",
+                "mode": "RGB",
+                "subsampling": "4:2:0",
+                "componentIds": [1, 2, 3],
+                "samplingFactors": [[2, 2], [1, 1], [1, 1]],
+                "quantizationTableSelectors": [0, 1, 1],
+                "progressive": False,
+            },
+        ),
+    }
+    try:
+        pillow_subsampling, profile = profiles[subsampling]
+    except KeyError as error:
+        raise MvtecResearchError("jpegSubsampling is outside the approved output-encoding profiles") from error
+    return pillow_subsampling, profile
+
+
+def _quantization_tables_sha256(opened: Image.Image) -> str:
+    quantization = getattr(opened, "quantization", None)
+    if not isinstance(quantization, dict) or set(quantization) != {0, 1}:
+        raise MvtecResearchError("augmentation JPEG quantization tables are invalid")
+    normalized: dict[str, list[int]] = {}
+    for table_id in (0, 1):
+        values = quantization.get(table_id)
+        if not isinstance(values, (list, tuple)) or len(values) != 64:
+            raise MvtecResearchError("augmentation JPEG quantization table length is invalid")
+        table = list(values)
+        if any(not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 255 for value in table):
+            raise MvtecResearchError("augmentation JPEG quantization table values are invalid")
+        normalized[str(table_id)] = table
+    return canonical_json_sha256(normalized)
+
+
+def _jpeg_output_encoding_from_opened_image(opened: Image.Image) -> dict[str, Any]:
+    """Read only the JPEG coding profile needed for this research envelope."""
+
+    if opened.format != "JPEG" or opened.mode != "RGB":
+        raise MvtecResearchError("augmentation output must be an RGB JPEG")
+    layer = getattr(opened, "layer", None)
+    sampling = JpegImagePlugin.get_sampling(opened)
+    if not isinstance(layer, list) or len(layer) != 3:
+        raise MvtecResearchError("augmentation JPEG must have exactly three components")
+    component_ids: list[int] = []
+    factors: list[list[int]] = []
+    table_selectors: list[int] = []
+    for component in layer:
+        if not isinstance(component, tuple) or len(component) != 4:
+            raise MvtecResearchError("augmentation JPEG component metadata is invalid")
+        component_id, horizontal, vertical, table_selector = component
+        if (
+            not isinstance(component_id, int)
+            or isinstance(component_id, bool)
+            or component_id <= 0
+            or not isinstance(horizontal, int)
+            or isinstance(horizontal, bool)
+            or not isinstance(vertical, int)
+            or isinstance(vertical, bool)
+            or horizontal <= 0
+            or vertical <= 0
+            or not isinstance(table_selector, int)
+            or isinstance(table_selector, bool)
+            or table_selector < 0
+        ):
+            raise MvtecResearchError("augmentation JPEG component metadata is invalid")
+        component_ids.append(component_id)
+        factors.append([horizontal, vertical])
+        table_selectors.append(table_selector)
+    sampling_names = {0: "4:4:4", 2: "4:2:0"}
+    if sampling not in sampling_names:
+        raise MvtecResearchError("augmentation JPEG subsampling is outside the approved output-encoding profiles")
+    return {
+        "format": "JPEG",
+        "mode": "RGB",
+        "subsampling": sampling_names[sampling],
+        "componentIds": component_ids,
+        "samplingFactors": factors,
+        "quantizationTableSelectors": table_selectors,
+        "progressive": bool(opened.info.get("progressive") or opened.info.get("progression")),
+        "quantizationTablesSha256": _quantization_tables_sha256(opened),
+    }
+
+
+def _inspect_jpeg_output_encoding(path: Path) -> dict[str, Any]:
+    """Decode a generated JPEG header and return the auditable encoding profile."""
+
+    try:
+        with Image.open(path) as opened:
+            opened.load()
+            return _jpeg_output_encoding_from_opened_image(opened)
+    except MvtecResearchError:
+        raise
+    except (OSError, SyntaxError, ValueError) as error:
+        raise MvtecResearchError("unable to decode augmentation JPEG output") from error
+
+
+@lru_cache(maxsize=8)
+def _expected_jpeg_output_encoding(pillow_subsampling: int, jpeg_quality: int) -> dict[str, Any]:
+    """Derive the approved JPEG tables from the exact Pillow encoder arguments."""
+
+    if not 0 <= jpeg_quality <= 100:
+        raise MvtecResearchError("JPEG quality is outside the supported encoder range")
+    buffer = BytesIO()
+    Image.new("RGB", (16, 16), (90, 130, 180)).save(
+        buffer,
+        format="JPEG",
+        quality=jpeg_quality,
+        subsampling=pillow_subsampling,
+        optimize=False,
+        progressive=False,
+    )
+    buffer.seek(0)
+    try:
+        with Image.open(buffer) as opened:
+            opened.load()
+            return _jpeg_output_encoding_from_opened_image(opened)
+    except MvtecResearchError:
+        raise
+    except (OSError, SyntaxError, ValueError) as error:
+        raise MvtecResearchError("unable to derive the approved JPEG output encoding") from error
+
+
+def _expected_output_encoding(recipe: dict[str, Any], jpeg_quality: int) -> dict[str, Any]:
+    pillow_subsampling, static_profile = _output_encoding_profile(recipe)
+    expected = _expected_jpeg_output_encoding(pillow_subsampling, jpeg_quality)
+    if {name: expected[name] for name in static_profile} != static_profile:
+        raise MvtecResearchError("installed Pillow encoder does not emit the approved JPEG output profile")
+    return expected
+
+
+def _validate_output_encoding(value: Any, expected: dict[str, Any]) -> None:
+    if not isinstance(value, dict):
+        raise MvtecResearchError("augmentation outputEncoding must be an object")
+    _require_exact_fields(
+        value,
+        name="augmentation outputEncoding",
+        required=frozenset({
+            "format",
+            "mode",
+            "subsampling",
+            "componentIds",
+            "samplingFactors",
+            "quantizationTableSelectors",
+            "progressive",
+            "quantizationTablesSha256",
+        }),
+    )
+    if value != expected:
+        raise MvtecResearchError("augmentation outputEncoding does not match the frozen recipe")
+
+
+def _validate_v4_baseline(recipe: dict[str, Any]) -> None:
+    """Lock schema 1.1 to V3 parameters so V4 changes only chroma sampling."""
+
+    if recipe.get("id") != V4_RECIPE_ID:
+        raise MvtecResearchError("camera recipe 1.1 is reserved for the locked V4 JPEG 4:2:0 experiment")
+    if recipe.get("samplingSeedAnchor") != V4_SAMPLING_SEED_ANCHOR:
+        raise MvtecResearchError("camera recipe 1.1 must retain the V2 samplingSeedAnchor")
+    expected_sections = {
+        "geometry": V4_BASELINE_GEOMETRY,
+        "photometry": V4_BASELINE_PHOTOMETRY,
+        "offAxisLensShading": V4_BASELINE_LENS_SHADING,
+    }
+    for name, expected in expected_sections.items():
+        if recipe.get(name) != expected:
+            raise MvtecResearchError(f"camera recipe 1.1 must retain the locked V3 {name} values")
+    encoding = _require_mapping(recipe, "encoding")
+    if {name: encoding.get(name) for name in V4_BASELINE_ENCODING_QUALITY} != V4_BASELINE_ENCODING_QUALITY:
+        raise MvtecResearchError("camera recipe 1.1 must retain the locked V3 JPEG quality range")
+
+
 def load_camera_recipe(recipe_path: Path) -> tuple[dict[str, Any], str]:
     """Load the bounded generic camera/lighting recipe used by this protocol."""
 
@@ -160,8 +389,29 @@ def load_camera_recipe(recipe_path: Path) -> tuple[dict[str, Any], str]:
         recipe = json.loads(recipe_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise MvtecResearchError(f"Unable to read augmentation recipe: {recipe_path}") from error
-    if not isinstance(recipe, dict) or recipe.get("schemaVersion") != CAMERA_RECIPE_SCHEMA:
+    if not isinstance(recipe, dict) or recipe.get("schemaVersion") not in {
+        LEGACY_CAMERA_RECIPE_SCHEMA,
+        CAMERA_RECIPE_SCHEMA,
+    }:
         raise MvtecResearchError("unsupported camera augmentation recipe schema")
+    _require_exact_fields(
+        recipe,
+        name="camera augmentation recipe",
+        required=frozenset({
+            "schemaVersion",
+            "id",
+            "description",
+            "authoritative",
+            "productionAuthorized",
+            "blindPolicy",
+            "geometry",
+            "photometry",
+            "encoding",
+        }),
+        optional=frozenset({"samplingSeedAnchor", "offAxisLensShading"}),
+    )
+    _require_string(recipe, "id")
+    _require_string(recipe, "description")
     if recipe.get("authoritative") is not False or recipe.get("productionAuthorized") is not False:
         raise MvtecResearchError("camera augmentation recipe must be explicitly non-authoritative and non-production")
     if recipe.get("blindPolicy") != "BLIND_ORIGINAL_ONLY":
@@ -170,6 +420,44 @@ def load_camera_recipe(recipe_path: Path) -> tuple[dict[str, Any], str]:
     geometry = _require_mapping(recipe, "geometry")
     photometry = _require_mapping(recipe, "photometry")
     encoding = _require_mapping(recipe, "encoding")
+    _require_exact_fields(
+        geometry,
+        name="camera augmentation geometry",
+        required=frozenset({
+            "maxRotationDegrees",
+            "maxScaleDelta",
+            "maxTranslationFraction",
+            "maxCornerJitterFraction",
+        }),
+    )
+    _require_exact_fields(
+        photometry,
+        name="camera augmentation photometry",
+        required=frozenset({
+            "maxExposureEv",
+            "maxGammaDelta",
+            "maxWhiteBalanceDelta",
+            "maxShadingStrength",
+            "maxVignetteStrength",
+            "maxSensorNoiseStdDn",
+        }),
+    )
+    if recipe["schemaVersion"] == LEGACY_CAMERA_RECIPE_SCHEMA:
+        _require_exact_fields(
+            encoding,
+            name="legacy camera augmentation encoding",
+            required=frozenset({"jpegQualityMin", "jpegQualityMax"}),
+        )
+    else:
+        _require_exact_fields(
+            encoding,
+            name="camera augmentation encoding",
+            required=frozenset({"jpegQualityMin", "jpegQualityMax", "jpegSubsampling"}),
+        )
+        if _require_string(encoding, "jpegSubsampling") != "4:2:0":
+            raise MvtecResearchError("jpegSubsampling is outside the approved output-encoding profiles")
+        if "samplingSeedAnchor" not in recipe or "offAxisLensShading" not in recipe:
+            raise MvtecResearchError("camera recipe 1.1 must retain the controlled V3 sampling anchor and lens shading")
     bounds = (
         (geometry, "maxRotationDegrees", 0.0, 1.0),
         (geometry, "maxScaleDelta", 0.0, 0.015),
@@ -195,12 +483,20 @@ def load_camera_recipe(recipe_path: Path) -> tuple[dict[str, Any], str]:
     off_axis_lens_shading = recipe.get("offAxisLensShading")
     if off_axis_lens_shading is not None:
         lens = _require_mapping(recipe, "offAxisLensShading")
+        _require_exact_fields(
+            lens,
+            name="camera augmentation offAxisLensShading",
+            required=frozenset({"maxStrength", "maxCenterOffsetFraction"}),
+        )
         maximum_strength = _require_finite_number(lens, "maxStrength")
         maximum_offset = _require_finite_number(lens, "maxCenterOffsetFraction")
         if not 0.0 <= maximum_strength <= 0.04:
             raise MvtecResearchError("offAxisLensShading maxStrength is outside the approved generic-simulation range")
         if not 0.0 <= maximum_offset <= 0.25:
             raise MvtecResearchError("offAxisLensShading maxCenterOffsetFraction is outside the approved generic-simulation range")
+    if recipe["schemaVersion"] == CAMERA_RECIPE_SCHEMA:
+        _validate_v4_baseline(recipe)
+    _output_encoding_profile(recipe)
     return recipe, recipe_sha256
 
 
@@ -266,6 +562,8 @@ def validate_normal_augmentation_parent(record: dict[str, Any]) -> None:
         raise MvtecResearchError("only FIT and THRESHOLD_TUNING records may be augmented")
     if kind != "NOMINAL":
         raise MvtecResearchError("only nominal records may be augmented")
+    if record.get("defect") != "good":
+        raise MvtecResearchError("only good nominal records may be augmented")
     if record.get("maskRelativePath") is not None or record.get("maskSourcePath") is not None:
         raise MvtecResearchError("mask-bearing records may not be augmented")
     _require_string(record, "caseId")
@@ -382,6 +680,7 @@ def generate_normal_augmentations(
         raise MvtecResearchError("variants_per_parent must be between 1 and 8")
     manifest = _load_source_manifest(manifest_path)
     recipe, recipe_sha256 = load_camera_recipe(recipe_path)
+    pillow_subsampling, _ = _output_encoding_profile(recipe)
     _prepare_output_directory(output_dir, repository_root=repository_root)
     source_root = manifest_path.parent
     output_records: list[dict[str, Any]] = []
@@ -408,7 +707,18 @@ def generate_normal_augmentations(
             target_path = output_dir / relative_path
             target_path.parent.mkdir(parents=True, exist_ok=True)
             augmented = apply_camera_augmentation(source_image, parameters)
-            augmented.save(target_path, format="JPEG", quality=int(parameters["jpegQuality"]), subsampling=0, optimize=False, progressive=False)
+            augmented.save(
+                target_path,
+                format="JPEG",
+                quality=int(parameters["jpegQuality"]),
+                subsampling=pillow_subsampling,
+                optimize=False,
+                progressive=False,
+            )
+            expected_output_encoding = _expected_output_encoding(recipe, int(parameters["jpegQuality"]))
+            output_encoding = _inspect_jpeg_output_encoding(target_path)
+            if output_encoding != expected_output_encoding:
+                raise MvtecResearchError("generated JPEG headers do not match the frozen recipe")
             output_records.append({
                 "caseId": f"{parent['caseId']}/camera-augmentation/{variant_id:02d}",
                 "parentCaseId": parent["caseId"],
@@ -421,6 +731,7 @@ def generate_normal_augmentations(
                 "sourceSha256": sha256_file(target_path),
                 "variantId": variant_id,
                 "parameters": parameters,
+                "outputEncoding": output_encoding,
             })
     document: dict[str, Any] = {
         "schemaVersion": CAMERA_AUGMENTATION_SCHEMA,
@@ -553,6 +864,11 @@ def load_validated_normal_augmentations(augmentation_manifest_path: Path, source
         )
         if parameters != expected_parameters:
             raise MvtecResearchError("augmentation parameters do not match the frozen recipe and parent")
+        expected_output_encoding = _expected_output_encoding(recipe, int(expected_parameters["jpegQuality"]))
+        output_encoding = record.get("outputEncoding")
+        _validate_output_encoding(output_encoding, expected_output_encoding)
+        if _inspect_jpeg_output_encoding(output_path) != expected_output_encoding:
+            raise MvtecResearchError("augmentation outputEncoding does not match decoded JPEG headers")
         expected_case_id = f"{parent_case_id}/camera-augmentation/{variant_id:02d}"
         if case_id != expected_case_id:
             raise MvtecResearchError("augmentation caseId does not match its parent and variant")

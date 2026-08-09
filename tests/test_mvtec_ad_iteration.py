@@ -238,13 +238,15 @@ def test_iteration_identity_and_score_records_preserve_augmentation_variant_ids(
     assert tool._score_record(derived)["variantId"] == 4
 
 
-def _write_normal_only_manifest(tmp_path: Path, *, fit_kind: str = "NOMINAL") -> tuple[Path, Path]:
+def _write_normal_only_manifest(
+    tmp_path: Path, *, fit_kind: str = "NOMINAL", fit_defect: str = "good"
+) -> tuple[Path, Path]:
     image_path = tmp_path / "normal.png"
     Image.new("RGB", (32, 32), (90, 130, 180)).save(image_path)
     source_sha256 = f"sha256:{hashlib.sha256(image_path.read_bytes()).hexdigest()}"
     records = [
         {"caseId": "capsule/fit/001", "category": "capsule", "role": "FIT", "kind": fit_kind,
-         "defect": "good", "relativePath": image_path.name, "sourceSha256": source_sha256},
+         "defect": fit_defect, "relativePath": image_path.name, "sourceSha256": source_sha256},
         {"caseId": "capsule/tuning/001", "category": "capsule", "role": "THRESHOLD_TUNING", "kind": "NOMINAL",
          "defect": "good", "relativePath": image_path.name, "sourceSha256": source_sha256},
         {"caseId": "capsule/blind/001", "category": "capsule", "role": "BLIND", "kind": "NOMINAL",
@@ -263,7 +265,14 @@ def _write_normal_only_manifest(tmp_path: Path, *, fit_kind: str = "NOMINAL") ->
 def test_iteration_rejects_anomalous_fit_or_tuning_records_before_feature_loading(tmp_path: Path) -> None:
     tool = _tool_module()
     manifest_path, _ = _write_normal_only_manifest(tmp_path, fit_kind="ANOMALY")
-    with pytest.raises(tool.IterationError, match="FIT and THRESHOLD_TUNING records must be nominal"):
+    with pytest.raises(tool.IterationError, match="FIT and THRESHOLD_TUNING records must be good nominal"):
+        tool.load_frozen_records(manifest_path)
+
+
+def test_iteration_rejects_non_good_nominal_fit_before_feature_loading(tmp_path: Path) -> None:
+    tool = _tool_module()
+    manifest_path, _ = _write_normal_only_manifest(tmp_path, fit_defect="crack")
+    with pytest.raises(tool.IterationError, match="FIT and THRESHOLD_TUNING records must be good nominal"):
         tool.load_frozen_records(manifest_path)
 
 

@@ -50,7 +50,16 @@ to a wholesale reseeding of geometry and photometry.
 V3 deliberately does not add blur, glare, radial distortion, hot pixels, or
 stronger noise. Those effects need real device/fixture evidence before they
 can be treated as normal-label-preserving simulation. The current JPEG output
-is 4:4:4; mobile 4:2:0 behavior remains a separate, future experiment.
+for v1--v3 is 4:4:4.
+
+[v4](../tools/mvtec_ad_camera_lighting_recipe_v4.json) is the separate,
+single-factor mobile-JPEG experiment: it retains v3's geometry, photometry,
+off-axis lens shading, quality range, and v2-based `samplingSeedAnchor`, but
+uses only JPEG 4:2:0 chroma subsampling. It adds no RNG draw or reordering, so
+every v4 parent/variant retains exactly the same sampled v3 parameters; the
+encoded chroma sampling is the only intended visual difference. It is still a
+generic research simulation, not proof of a particular phone encoder, device
+calibration, physical qualification, or production authorization.
 
 V3-R4 is a seed-replication study, not a new visual effect: it uses the
 unchanged v3 recipe with `--variants-per-parent 4`. Its formal normal-only
@@ -87,14 +96,32 @@ The manifest declares all of the following:
 - `blindPolicy: BLIND_ORIGINAL_ONLY`; and
 - the raw frozen-manifest file digest plus its declared manifest identity.
 
-The current generator emits augmentation-manifest schema `1.1`. It embeds the
+The current generator emits augmentation-manifest schema `1.2`. It embeds the
 parsed recipe and records generator module/entrypoint hashes, Git revision and
-worktree state, plus Python, Pillow, OpenCV, and NumPy versions. Before scoring,
-the loader verifies the actual recipe file digest, rederives every parameter
-set from its parent and variant, and requires exactly every eligible normal
-parent times the declared variant count. Older `1.0` packages lack these
-bindings and must be regenerated for a new iteration; they are not silently
-upgraded.
+worktree state, plus Python, Pillow, OpenCV, and NumPy versions. Every record
+also attests `outputEncoding` (JPEG/RGB, chroma subsampling, and the three
+decoded sampling factors). It also binds component IDs, quantization-table
+selectors, non-progressive encoding, and a SHA-256 of the two 64-value JPEG
+quantization tables. Those tables are independently rederived with the exact
+sampled JPEG quality and explicit Pillow save arguments. Generation reopens
+each written JPEG to verify that attestation; before scoring, the loader
+verifies it again after checking the file digest. This prevents a manifest
+whose hashes were recomputed from silently relabelling a 4:4:4 or other JPEG
+as v4 4:2:0, lowering its JPEG quality, or changing it to progressive coding.
+It is a coding-profile check, not a replacement for an externally signed
+package or deterministic re-rendering when an adversary can replace pixels
+while preserving all JPEG header and quantization fields.
+
+Recipe schema `1.0` is retained only for the historical v1--v3 4:4:4 recipes.
+The v4 recipe uses schema `1.1`, whose closed allowlist permits exactly the
+locked v3 geometry, photometry, quality range, off-axis lens values, and
+v2-based seed anchor plus `jpegSubsampling: "4:2:0"`. Schema `1.1` is reserved
+for this exact V4 experiment, so it cannot hide a geometry, photometry,
+quantization, progressive, or other visual-effect change behind the one-factor
+claim. The loader rederives every parameter set from its parent and variant and
+requires exactly every eligible normal parent times the declared variant count.
+Older `1.0`/`1.1` augmentation packages lack the current bindings and must be
+regenerated for a new iteration; they are not silently upgraded.
 
 Any score runner must verify these bindings before consuming the derived
 normal FIT/tuning images. It must verify every generated image SHA-256 and
