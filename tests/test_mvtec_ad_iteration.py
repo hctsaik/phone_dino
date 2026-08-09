@@ -277,6 +277,23 @@ def test_iteration_rejects_non_good_nominal_fit_before_feature_loading(tmp_path:
         tool.load_frozen_records(manifest_path)
 
 
+def test_normal_only_loader_skips_blind_payload_before_label_or_mask_validation(tmp_path: Path) -> None:
+    tool = _tool_module()
+    manifest_path, _ = _write_normal_only_manifest(tmp_path)
+    document = json.loads(manifest_path.read_text(encoding="utf-8"))
+    blind = document["records"][2]
+    blind["kind"] = "ANOMALY"
+    blind["defect"] = "forbidden-to-normal-only"
+    blind["maskRelativePath"] = "..\\blind-mask.png"
+    blind["maskSha256"] = "not-a-digest"
+    manifest_path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+
+    _, normal_records = tool.load_frozen_records(manifest_path, normal_only=True)
+    assert [record["caseId"] for record in normal_records] == ["capsule/fit/001", "capsule/tuning/001"]
+    with pytest.raises(tool.IterationError):
+        tool.load_frozen_records(manifest_path)
+
+
 def test_normal_only_iteration_never_embeds_blind_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tool = _tool_module()
     manifest_path, image_path = _write_normal_only_manifest(tmp_path)

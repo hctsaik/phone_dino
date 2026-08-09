@@ -229,8 +229,16 @@ def feature_extractor_identity(
     }
 
 
-def load_frozen_records(manifest_path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Load the immutable MVTec source manifest without accepting unknown roles."""
+def load_frozen_records(
+    manifest_path: Path, *, normal_only: bool = False
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Load only the source records permitted by the requested research mode.
+
+    In ``normal_only`` mode the parser intentionally looks at a blind record's
+    role only, then skips it before reading its label, path, digest, or mask
+    fields.  This keeps the normal-development path from consuming blind or
+    anomaly metadata merely because those rows share an immutable manifest.
+    """
 
     manifest = _read_json(manifest_path, description="frozen MVTec manifest")
     if manifest.get("schemaVersion") != "phone-dino.mvtec-ad-smoke/1.0" or manifest.get("authoritative") is not False:
@@ -250,6 +258,8 @@ def load_frozen_records(manifest_path: Path) -> tuple[dict[str, Any], list[dict[
             raise IterationError("frozen MVTec caseId is duplicated")
         seen_case_ids.add(case_id)
         role = _require_string(record, "role")
+        if normal_only and role == "BLIND":
+            continue
         kind = _require_string(record, "kind")
         if role not in {"FIT", "THRESHOLD_TUNING", "BLIND"} or kind not in {"NOMINAL", "ANOMALY"}:
             raise IterationError("frozen MVTec role or kind is unsupported")
@@ -287,10 +297,12 @@ def input_sort_key(record: dict[str, Any]) -> tuple[str, int, str]:
 def build_iteration_inputs(
     manifest_path: Path,
     augmentation_manifest_path: Path | None,
+    *,
+    normal_only: bool,
 ) -> tuple[dict[str, Any], dict[str, list[dict[str, Any]]], dict[str, Any]]:
     """Build per-category inputs, retaining original-only blind membership."""
 
-    manifest, originals = load_frozen_records(manifest_path)
+    manifest, originals = load_frozen_records(manifest_path, normal_only=normal_only)
     augmented: list[dict[str, Any]] = []
     augmentation_details: dict[str, Any] = {"state": "NONE", "blindAugmentedCount": 0}
     if augmentation_manifest_path is not None:
@@ -1039,7 +1051,9 @@ def run(
     if algorithm not in {"global-knn", "patch-knn"}:
         raise IterationError("algorithm must be global-knn or patch-knn")
     started = time.perf_counter()
-    manifest, categories, augmentation = build_iteration_inputs(manifest_path, augmentation_manifest_path)
+    manifest, categories, augmentation = build_iteration_inputs(
+        manifest_path, augmentation_manifest_path, normal_only=normal_only
+    )
     timings = {
         "provenanceSeconds": 0.0,
         "inputVerificationSeconds": 0.0,
