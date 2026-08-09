@@ -1,9 +1,10 @@
 # MVTec AD research improvement work log
 
-**Status:** implementation and one locked-configuration blind observation
-completed on 2026-08-09. This log is for non-commercial research only. None of
-the work below changes the PhoneDINO service, artifact schema, QR/ChArUco
-process, physical measurement, or any equipment decision.
+**Status:** implementation, one historical locked-configuration blind
+observation, and one later normal-only configuration lock completed on
+2026-08-09. This log is for non-commercial research only. None of the work
+below changes the PhoneDINO service, artifact schema, QR/ChArUco process,
+physical measurement, or any equipment decision.
 
 ## Fixed inputs
 
@@ -136,6 +137,52 @@ comparison against the clean 1,024-prototype report is external at
 `patch_clean1024_vs_locked_v2_2048.json`; it is an observational delta report,
 not a candidate winner.
 
+## V3 off-axis normal-only configuration lock (2026-08-09)
+
+The schema-1.1 V3 camera envelope was generated outside Git at
+`camera_capture_v3_off_axis\augmentation_manifest.json`. It contains 192
+deterministic normal-only derivatives (one each for every FIT/tuning normal),
+with the narrow V2 envelope preserved through its sampling anchor and one
+additional bounded, non-brightening off-axis lens-shading perturbation. Its
+manifest digest is
+`sha256:da5bc83d10ad6857af0d9c27e9fb391b63a4bdbda524e405084702b3718bea79`;
+the recipe digest is
+`sha256:5cf5b83ac58251b350d1fb2c01c6ac07e6fe624bf5e47ae0f5f6da7c8ee887d4`.
+Its manifest explicitly declares `BLIND_ORIGINAL_ONLY`.
+
+Two schema-1.2 `--normal-only` reports were then run from exactly this normal
+evaluation envelope: `patch_v3_1024_normal_only.json` (cold cache, 103.78 s)
+and `patch_v3_2048_normal_only.json` (reused cache, 27.90 s). Both have zero
+blind/anomaly feature inputs, zero blind score records, no pixel metrics, and
+the same score-free feature/calibration/original-tuning membership identities.
+The 1024 report digest is
+`sha256:8db20fa0e855df272124633cf4990a1b89523e7bee1f911b94400ff5bef2f2a8`;
+the 2048 report digest is
+`sha256:ea58486207c8dec5ae520efd4f2aa250c072593b100344bb31b9513c485d73a6`.
+
+Before the 2048 run, the external contract
+`selection_v3\v3_normal_only_contract.json` locked both candidate
+configurations, the feature/calibration membership, the model/tool/recipe
+digests, and the per-category normal gates. Its digest is
+`sha256:224fba9878e087b36e553c69e27c42703da021929aee0f058f7b7f86d05af507`.
+It permits no threshold or original-tuning P95 increase versus the 1024
+reference, caps the augmentation P95-minus-original and paired delta P95/max
+at 0.05, and prioritizes the smallest worst paired augmentation delta P95.
+
+| Candidate | Worst paired augmentation ΔP95 | Worst threshold | Mean threshold | Selector result |
+| --- | ---: | ---: | ---: | --- |
+| V3 1024 | 0.02746 | 0.51143 | 0.42507 | Locked |
+| V3 2048 | 0.03338 | 0.30447 | 0.27817 | Eligible, not selected |
+
+The JSON-only selector wrote
+`selection_v3\v3_normal_selection.json` with digest
+`sha256:1adb386b097bce7b4699d2f288d7f19ecffe78d5a8fe83c568cfd05d1f266c31`.
+Both candidates passed every frozen gate. V3 1024 was selected because its
+worst paired normal perturbation ΔP95 was lower; the fixed lexicographic
+objective deliberately ranks that robustness measure before lower thresholds.
+This is a normal-only research configuration lock, not evidence of better
+anomaly detection. It did not access, score, or report the current blind set.
+
 ## Physical readiness audit (2026-08-09)
 
 The offline research result was not used as a substitute for a physical-device
@@ -170,12 +217,14 @@ untouched until configuration is locked.
 ## Next boundary
 
 The offline software deliverables for this MVTec iteration are complete. Do
-not tune v2/2,048 from the locked blind AUROC, defect deltas, or masks. A new
-research iteration must first freeze a new development/blind manifest, or use
-only normal FIT/tuning data. Any physical-device work remains separate and
-requires controlled captures, QR + ChArUco reference-board gates, context
-anchors, native capture attestation, fault injection, and MSA. MVTec images
-cannot prove those requirements.
+not tune V2/2,048 from the historical locked blind AUROC, defect deltas, or
+masks. The later V3 1024 lock must likewise not trigger another use of the
+current blind set: a new blind observation requires a newly frozen held-out
+manifest. Any further configuration development must use only normal
+FIT/tuning data or a separately frozen normal development envelope. Physical-
+device work remains separate and requires controlled captures, QR + ChArUco
+reference-board gates, context anchors, native capture attestation, fault
+injection, and MSA. MVTec images cannot prove those requirements.
 
 ## Working-tree boundary
 
