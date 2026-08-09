@@ -59,6 +59,65 @@ Use a fresh `--output` path for every run. The command refuses output and
 feature-cache locations inside this Git worktree, and never overwrites an
 existing report.
 
+## Normal-only configuration lock
+
+Iteration-report schema `1.2` adds `normalOnlyEvidence` and an exact candidate
+configuration. The evidence contains score-free, stable-sorted feature,
+calibration, and original-tuning membership lists plus independently checked
+digests. A normal-only report must have zero blind and anomaly feature inputs,
+only `THRESHOLD_TUNING`/`NOMINAL` score records, and no pixel metrics. Reports
+that do not meet those conditions cannot enter a formal candidate comparison.
+
+After a reference normal-only report exists, freeze an external selection
+contract before running the remaining predeclared candidates. Each candidate
+entry binds its exact algorithm configuration (including patch-memory and
+top-k settings), not just a friendly ID. The contract also binds the
+source-manifest identity, model/preprocessing/tool digests, exact normal
+feature/calibration/tuning membership, normal augmentation envelope,
+reference-report digest, explicit per-category normal-robustness caps, and a
+fixed lexicographic objective.
+
+For a patch candidate, a frozen contract entry has this shape (all digests and
+the contract self-digest must be concrete values in the external file):
+
+```json
+{
+  "id": "v3-2048",
+  "candidateConfiguration": {
+    "algorithmId": "DINOV2_PATCH_NEAREST_NORMAL_COSINE_TOPK_V1",
+    "batchSize": 4,
+    "memoryBankSelection": "DETERMINISTIC_EVENLY_SPACED_PATCH_SUBSET_AFTER_STABLE_PARENT_SORT",
+    "maxPrototypePatches": 2048,
+    "topKMostAnomalousPatches": 5,
+    "prototypeBlockSize": 256
+  }
+}
+```
+
+```powershell
+.venv\Scripts\python tools\select_mvtec_ad_normal_candidate.py `
+  --contract C:\code\claude\_media_out_of_repo\mvtec_ad\subset_v1\selection\v3_contract.json `
+  --candidate v3-1024=C:\code\claude\_media_out_of_repo\mvtec_ad\subset_v1\reports\v3_1024_normal_only.json `
+  --candidate v3-2048=C:\code\claude\_media_out_of_repo\mvtec_ad\subset_v1\reports\v3_2048_normal_only.json `
+  --output C:\code\claude\_media_out_of_repo\mvtec_ad\subset_v1\selection\v3_normal_selection.json
+```
+
+The selector is JSON-only: it refuses reports inside Git, never opens images,
+masks, model weights, or PhoneDINO endpoints, and never starts a blind run. It
+rejects any candidate with blind/anomaly score evidence, mismatched input,
+calibration, candidate-configuration, or tool identity, missing
+derivative-parent coverage, inconsistent normal summaries, out-of-range cosine
+scores, duplicate report reuse, or a failed declared gate. It hashes the exact
+JSON bytes it validates and emits either a research configuration lock or
+`NO_ELIGIBLE_CONFIGURATION`; neither result proves anomaly performance or
+authorizes production/physical use.
+
+Do not compare an unaugmented report against an augmented report through this
+selector: their normal input identities differ. Legacy `1.0`/`1.1` iteration
+reports also lack the required normal-only evidence; regenerate the external package
+and rerun only `--normal-only` after the current tool revision instead of
+retrofitting an old report.
+
 ## Strict comparison
 
 To compare two fixed reports, join their identical original score membership

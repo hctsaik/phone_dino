@@ -37,7 +37,7 @@ from phone_dino.mvtec_research import (
 from phone_dino.production import DINO_INPUT_SIZE, DINO_RESIZE_SHORT_EDGE, DinoV2Embedder
 
 
-ITERATION_SCHEMA_VERSION = "phone-dino.mvtec-ad-iteration-report/1.0"
+ITERATION_SCHEMA_VERSION = "phone-dino.mvtec-ad-iteration-report/1.2"
 FEATURE_CACHE_SCHEMA_VERSION = "phone-dino.mvtec-ad-feature-cache/1.0"
 PREPROCESSING_ID = "DINOV2_RESIZE_SHORT_EDGE_256_CENTER_CROP_224_IMAGENET_NORMALIZE_V1"
 
@@ -611,6 +611,7 @@ def _score_record(record: dict[str, Any], components: dict[str, Any] | None = No
     if record.get("isAugmentation", False):
         score_record["parentCaseId"] = record.get("parentCaseId")
         score_record["parentSourceSha256"] = record.get("parentSourceSha256")
+        score_record["augmentationRecipeSha256"] = record.get("augmentationRecipeSha256")
     if components is not None:
         score_record |= {
             "maxPatchDistance": float(components["maxPatchDistance"]),
@@ -638,6 +639,100 @@ def _categorize(
     if not fit or not tuning or (not normal_only and not blind):
         raise IterationError("each category needs normal FIT/tuning and original blind inputs")
     return sorted(fit, key=input_sort_key), sorted(tuning, key=input_sort_key), ([] if normal_only else sorted(blind, key=input_sort_key))
+
+
+def input_identity_record(record: dict[str, Any]) -> dict[str, Any]:
+    """Return the score-free input membership fields bound by a research report."""
+
+    return {
+        "caseId": record["caseId"],
+        "category": record["category"],
+        "role": record["role"],
+        "kind": record["kind"],
+        "sourceSha256": record["sourceSha256"],
+        "isAugmentation": bool(record.get("isAugmentation", False)),
+        "parentCaseId": record.get("parentCaseId"),
+        "parentSourceSha256": record.get("parentSourceSha256"),
+        "augmentationRecipeSha256": record.get("augmentationRecipeSha256"),
+    }
+
+
+def input_identity_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [input_identity_record(record) for record in sorted(records, key=lambda item: str(item["caseId"]))]
+
+
+def normal_input_identity(records: list[dict[str, Any]]) -> str:
+    """Bind the exact normal feature envelope without reading blind labels."""
+
+    identity_records = input_identity_records([
+        record for record in records
+        if record["role"] in {"FIT", "THRESHOLD_TUNING"} and record["kind"] == "NOMINAL"
+    ])
+    if not identity_records:
+        raise IterationError("normal input identity requires FIT or THRESHOLD_TUNING nominal records")
+    return canonical_json_sha256(identity_records)
+
+
+def normal_only_evidence(
+    feature_records: list[dict[str, Any]],
+    score_records: list[dict[str, Any]],
+    calibration_records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Expose auditable membership for a JSON-only normal candidate selector."""
+
+    def roles(records: list[dict[str, Any]]) -> list[str]:
+        return sorted({str(record["role"]) for record in records})
+
+    def kinds(records: list[dict[str, Any]]) -> list[str]:
+        return sorted({str(record["kind"]) for record in records})
+
+    normal_records = [
+        record for record in feature_records
+        if record["role"] in {"FIT", "THRESHOLD_TUNING"} and record["kind"] == "NOMINAL"
+    ]
+    feature_inputs = input_identity_records(feature_records)
+    calibration_inputs = input_identity_records(calibration_records)
+    original_tuning_inputs = [record for record in calibration_inputs if not record["isAugmentation"]]
+    return {
+        "featureInputCount": len(feature_records),
+        "featureInputRoles": roles(feature_records),
+        "featureInputKinds": kinds(feature_records),
+        "blindFeatureInputCount": sum(record["role"] == "BLIND" for record in feature_records),
+        "anomalyFeatureInputCount": sum(record["kind"] == "ANOMALY" for record in feature_records),
+        "normalInputRecordCount": len(normal_records),
+        "featureInputs": feature_inputs,
+        "featureInputIdentitySha256": canonical_json_sha256(feature_inputs),
+        "normalInputIdentitySha256": normal_input_identity(normal_records),
+        "reportedScoreCount": len(score_records),
+        "reportedScoreRoles": roles(score_records),
+        "reportedScoreKinds": kinds(score_records),
+        "calibrationScoreCount": len(calibration_records),
+        "calibrationScoreRoles": roles(calibration_records),
+        "calibrationScoreKinds": kinds(calibration_records),
+        "calibrationInputs": calibration_inputs,
+        "calibrationInputIdentitySha256": canonical_json_sha256(calibration_inputs),
+        "originalTuningInputCount": len(original_tuning_inputs),
+        "originalTuningInputs": original_tuning_inputs,
+        "originalTuningInputIdentitySha256": canonical_json_sha256(original_tuning_inputs),
+    }
+
+
+def candidate_configuration(algorithm_report: dict[str, Any], *, batch_size: int) -> dict[str, Any]:
+    """Expose every score-affecting candidate knob for a frozen selection contract."""
+
+    configuration: dict[str, Any] = {
+        "algorithmId": algorithm_report["id"],
+        "batchSize": batch_size,
+    }
+    if algorithm_report["id"] == "DINOV2_PATCH_NEAREST_NORMAL_COSINE_TOPK_V1":
+        for name in (
+            "memoryBankSelection",
+            "maxPrototypePatches",
+            "topKMostAnomalousPatches",
+            "prototypeBlockSize",
+        ):
+            configuration[name] = algorithm_report[name]
+    return configuration
 
 
 def run(
@@ -681,10 +776,11 @@ def run(
             if case_id in all_records_by_case:
                 raise IterationError("iteration input caseId is duplicated")
             all_records_by_case[case_id] = record
+    feature_records = [all_records_by_case[case_id] for case_id in sorted(all_records_by_case)]
     timings = {"inputVerificationSeconds": 0.0, "featureInferenceSeconds": 0.0, "scoringSeconds": 0.0}
     cache_counts = {"hits": 0, "misses": 0}
     features = extract_features(
-        [all_records_by_case[case_id] for case_id in sorted(all_records_by_case)],
+        feature_records,
         feature_kind=feature_kind,
         embedder=embedder,
         cache=cache,
@@ -746,9 +842,15 @@ def run(
             }
         category_reports[category] = metric_summary(blind, threshold) | normal_calibration_summary(tuning) | category_algorithm
         for record in tuning:
-            calibration_records.append(_score_record(record, component_by_case.get(str(record["caseId"]))))
+            calibration_records.append(_score_record(
+                record,
+                None if normal_only else component_by_case.get(str(record["caseId"])),
+            ))
             if not record["isAugmentation"]:
-                score_records.append(_score_record(record, component_by_case.get(str(record["caseId"]))))
+                score_records.append(_score_record(
+                    record,
+                    None if normal_only else component_by_case.get(str(record["caseId"])),
+                ))
         for record in blind:
             scored = _score_record(record, component_by_case.get(str(record["caseId"])))
             score_records.append(scored)
@@ -775,6 +877,8 @@ def run(
             "topKMostAnomalousPatches": top_k_patches,
             "prototypeBlockSize": prototype_block_size,
         }
+    evidence = normal_only_evidence(feature_records, score_records, calibration_records)
+    configuration = candidate_configuration(algorithm_report, batch_size=batch_size)
     report = {
         "schemaVersion": ITERATION_SCHEMA_VERSION,
         "authoritative": False,
@@ -791,6 +895,8 @@ def run(
         "inputManifestDeclaredSha256": manifest.get("manifestSha256"),
         "augmentation": augmentation,
         "algorithm": algorithm_report,
+        "candidateConfiguration": configuration,
+        "candidateConfigurationSha256": canonical_json_sha256(configuration),
         "execution": {
             "batchSize": batch_size,
             "featureCache": None if cache is None else str(feature_cache_path),
@@ -805,6 +911,7 @@ def run(
             "torchThreadCount": __import__("torch").get_num_threads(),
         },
         "categories": category_reports,
+        "normalOnlyEvidence": evidence,
         "calibrationScores": sorted(calibration_records, key=lambda record: record["caseId"]),
         "scores": sorted(score_records, key=lambda record: record["caseId"]),
         "pixelLocalization": pixel_metrics,

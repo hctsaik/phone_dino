@@ -179,3 +179,40 @@ def test_normal_only_iteration_never_embeds_blind_inputs(tmp_path: Path, monkeyp
     assert SpyEmbedder.embedded_images == 2
     assert report["blindReporting"]["state"] == "NOT_RUN"
     assert [record["caseId"] for record in report["scores"]] == ["capsule/tuning/001"]
+    evidence = report["normalOnlyEvidence"]
+    assert evidence["featureInputCount"] == 2
+    assert evidence["featureInputRoles"] == ["FIT", "THRESHOLD_TUNING"]
+    assert evidence["featureInputKinds"] == ["NOMINAL"]
+    assert evidence["blindFeatureInputCount"] == 0
+    assert evidence["anomalyFeatureInputCount"] == 0
+    assert evidence["reportedScoreRoles"] == ["THRESHOLD_TUNING"]
+    assert evidence["reportedScoreKinds"] == ["NOMINAL"]
+    assert evidence["calibrationScoreRoles"] == ["THRESHOLD_TUNING"]
+    assert evidence["calibrationScoreKinds"] == ["NOMINAL"]
+    assert evidence["normalInputIdentitySha256"].startswith("sha256:")
+    assert [record["caseId"] for record in evidence["featureInputs"]] == ["capsule/fit/001", "capsule/tuning/001"]
+    assert [record["caseId"] for record in evidence["calibrationInputs"]] == ["capsule/tuning/001"]
+    assert evidence["calibrationInputIdentitySha256"].startswith("sha256:")
+    assert evidence["originalTuningInputCount"] == 1
+    assert evidence["originalTuningInputIdentitySha256"] == evidence["calibrationInputIdentitySha256"]
+    assert report["schemaVersion"] == "phone-dino.mvtec-ad-iteration-report/1.2"
+    assert report["candidateConfiguration"] == {
+        "algorithmId": "DINOV2_GLOBAL_NEAREST_NORMAL_COSINE_V1",
+        "batchSize": 4,
+    }
+    assert report["candidateConfigurationSha256"] == tool.canonical_json_sha256(report["candidateConfiguration"])
+
+
+def test_normal_input_identity_is_stable_and_excludes_blind_or_anomalous_inputs() -> None:
+    tool = _tool_module()
+    records = [
+        {"caseId": "tuning", "category": "tile", "role": "THRESHOLD_TUNING", "kind": "NOMINAL", "sourceSha256": f"sha256:{'2' * 64}"},
+        {"caseId": "blind", "category": "tile", "role": "BLIND", "kind": "ANOMALY", "sourceSha256": f"sha256:{'3' * 64}"},
+        {"caseId": "fit", "category": "tile", "role": "FIT", "kind": "NOMINAL", "sourceSha256": f"sha256:{'1' * 64}"},
+    ]
+    first = tool.normal_input_identity(records)
+    second = tool.normal_input_identity(list(reversed(records)))
+    assert first == second
+    changed = [dict(record) for record in records]
+    changed[2]["sourceSha256"] = f"sha256:{'4' * 64}"
+    assert tool.normal_input_identity(changed) != first
