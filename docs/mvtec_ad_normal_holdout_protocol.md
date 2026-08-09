@@ -100,6 +100,9 @@ derive bounded camera/coding variants from `FIT` only. Raw
 remain unmodified normal images: synthetic variants must not influence a
 threshold, candidate selection, or confirmation observation.
 
+The exact FIT-only transform, package-validation, and command boundary are
+specified in [the fresh FIT-only camera augmentation protocol](mvtec_ad_fresh_fit_augmentation_protocol.md).
+
 ## Commands
 
 The commands below are examples; replace every external path with a fresh one.

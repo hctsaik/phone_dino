@@ -1,0 +1,40 @@
+{
+  "authoritative": false,
+  "calibrationEvidence": {
+    "state": "GENERIC_PRIOR_NOT_DEVICE_CALIBRATED"
+  },
+  "description": "Closed generic fresh-cohort FIT-only camera prior: narrow geometry, exposure, white balance, low-frequency shading, off-axis lens shading, conservative Poisson-Gaussian-like sensor noise, and fixed JPEG 4:2:0 Q95. It is not device calibration or production authorization.",
+  "geometry": {
+    "maxCornerJitterFraction": 0.002,
+    "maxRotationDegrees": 0.35,
+    "maxScaleDelta": 0.005,
+    "maxTranslationFraction": 0.002
+  },
+  "id": "FRESH_GENERIC_FIT_CAPTURE_V1_NARROW_CAMERA_420_Q95",
+  "lensShading": {
+    "maxCenterOffsetFraction": 0.12,
+    "maxStrength": 0.025
+  },
+  "outputEncoding": {
+    "format": "JPEG",
+    "jpegQuality": 95,
+    "jpegQuantizationTablesSha256": "sha256:f67e35fd0dcd2fd9f999077e2aae8560e6327a8477c45427f6ea2e0a224cd187",
+    "jpegSubsampling": "4:2:0",
+    "progressive": false
+  },
+  "photometry": {
+    "maxDirectionalShadingStrength": 0.04,
+    "maxExposureEv": 0.1,
+    "maxGammaDelta": 0.025,
+    "maxVignetteStrength": 0.025,
+    "maxWhiteBalanceDelta": 0.025
+  },
+  "productionAuthorized": false,
+  "purpose": "OFFLINE_MVTEC_FRESH_FIT_AUGMENTATION_ONLY",
+  "samplingAlgorithm": "NAMED_SHA256_SUBSTREAMS_V1",
+  "schemaVersion": "phone-dino.mvtec-ad-fresh-fit-camera-recipe/1.0",
+  "sensorNoise": {
+    "maxReadNoiseStdDn": 0.35,
+    "maxShotNoiseStdDnAtFullScale": 0.35
+  }
+}

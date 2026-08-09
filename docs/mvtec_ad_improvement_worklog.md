@@ -393,6 +393,22 @@ camera/coding variants from FIT parents only; tuning, selection, and
 confirmation remain raw normal originals. This keeps the new evidence chain
 separate from historical recipe/module/cache identities.
 
+## Fresh FIT camera augmentation V1 implementation (2026-08-09)
+
+The standalone V1 generator and validator are now implemented, with a closed
+generic-prior recipe. Its named SHA-256 substreams independently sample narrow
+geometry, photometry, low-frequency lens shading, and conservative
+signal-dependent/read noise; output is pinned to non-progressive JPEG 4:2:0
+Q95 including its full quantization-table digest. It intentionally excludes
+blur, glare, occlusion, crop, synthetic defects, and capture-reject effects.
+
+The package validator rehashes FIT parents and validates every child against
+its exact parent/variant parameters, JPEG coding header, source/tool hashes,
+and deterministic byte-for-byte re-render. Its focused test fixture proves
+that corrupt tuning, selection, confirmation, and reserve files are not
+opened. The implementation is ready to generate a new external V1/R4 package;
+no external derivative has been created at this point.
+
 ## Physical readiness audit (2026-08-09)
 
 The offline research result was not used as a substitute for a physical-device
