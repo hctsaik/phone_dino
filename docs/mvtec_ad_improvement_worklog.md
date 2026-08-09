@@ -621,6 +621,27 @@ The parent confirmation partition remains explicitly
 `PRESERVED_NOT_DELEGATED_NOT_OPENED` with 96 records. This remains an
 exploratory, not-independent parent-reserve derivation.
 
+### V2 FIT-only R3 package generated and re-rendered
+
+The sealed successor FIT partition has now been consumed for the pre-registered
+V2 augmentation package only. It contains 36 raw FIT parents and 108
+deterministic derivatives: one each of `registration`, `illumination`, and
+`sensor_transport` per parent. The generator and validator opened no successor
+tuning, selection, remaining-reserve, or parent-confirmation image bytes.
+
+| Artifact | File digest | Declared digest |
+| --- | --- | --- |
+| V2 R3 augmentation manifest | `sha256:db5a773fa5e837854aaec834c73bfd33c7586314ef78f923dd0324f83c7632d1` | `sha256:bbc62770511f9066a8fc1bb9d9da065666ad21ed3519294db9e5e09072c43e43` |
+| Closed V2 recipe | — | `sha256:aad6e5fe929a1e75ee9fc874ce1c1708870ba8b9dbf1314637152bc3be74591f` |
+
+The package is bound to successor FIT identity
+`sha256:0f0df94572a3de59221c504b56a620c3aae0c84b55583bdf89c6181083290bfc`
+and the frozen successor envelope. It has fixed RGB JPEG 4:2:0 Q95 encoding
+and passed a full byte-for-byte deterministic re-render validation of all 108
+children. Its generation recorded commit `afc858e`; the repository worktree
+was not clean solely because the separately preserved bakeoff files and
+`pyproject.toml` changes remain user-owned and unstaged.
+
 ## Physical readiness audit (2026-08-09)
 
 The offline research result was not used as a substitute for a physical-device
