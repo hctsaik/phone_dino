@@ -1,7 +1,7 @@
 # MVTec AD research improvement work log
 
 **Status:** implementation, one historical locked-configuration blind
-observation, and one later normal-only configuration lock completed on
+observation, and two later normal-only configuration locks completed on
 2026-08-09. This log is for non-commercial research only. None of the work
 below changes the PhoneDINO service, artifact schema, QR/ChArUco process,
 physical measurement, or any equipment decision.
@@ -183,6 +183,43 @@ objective deliberately ranks that robustness measure before lower thresholds.
 This is a normal-only research configuration lock, not evidence of better
 anomaly detection. It did not access, score, or report the current blind set.
 
+## V3-R4 four-variant normal-only configuration lock (2026-08-09)
+
+The V3 recipe was held unchanged and regenerated as a deterministic
+four-seed replication package at
+`camera_capture_v3_r4\augmentation_manifest.json`. It has 768 normal-only
+derivatives: 576 FIT and 192 threshold-tuning images (256 per category), with
+four variants for every normal parent and `BLIND_ORIGINAL_ONLY`. The package
+manifest digest is
+`sha256:d7ad6525cfce72cb2776dd2b287c926652f90aa5ae23a029f8e5a3c8b44c5a11`;
+the unchanged V3 recipe digest is
+`sha256:5cf5b83ac58251b350d1fb2c01c6ac07e6fe624bf5e47ae0f5f6da7c8ee887d4`.
+
+The schema-1.4 reports bind `variantId` in feature membership and every
+tuning score. The schema-1.2 contract fixes four variants per parent and a
+0.05 P95/max paired-delta cap for every variant, in addition to the existing
+aggregate normal-only gates. It was frozen before the 2,048-prototype run at
+`selection_v3_r4\v3_r4_normal_only_contract.json`, digest
+`sha256:c514f6e6100dbd97dd0a12e8c3fb8a2b97287118623df83dcf6877aaba083b5a`.
+
+Both reports have 960 normal feature inputs, 240 tuning calibration scores,
+zero blind/anomaly feature inputs, `blindReporting.state: NOT_RUN`, and no
+pixel metrics. The 1,024 reference had 960 cache misses and took 223.26 s;
+the 2,048 candidate reused all 960 verified entries and took 59.21 s.
+
+| Candidate | Report digest | Worst paired delta P95 | Worst per-variant delta P95/max | Worst threshold | Mean threshold | Selector result |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| V3-R4 1024 | `sha256:e2116c21a9c35de2e4b52c968487daac0005bfbdeba946ea35f1f3c321e0644e` | 0.03686 | 0.04015 | 0.32436 | 0.29960 | Eligible |
+| V3-R4 2048 | `sha256:06c55c1a87ed820b192e8921e2dae71e8c9ed3b0aa7ac3231cd30746efa50dbd` | 0.02717 | 0.03305 | 0.26777 | 0.25927 | Locked |
+
+The JSON-only selector wrote
+`selection_v3_r4\v3_r4_normal_selection.json`, digest
+`sha256:ef4e1d38a9b75c8724d2dcf74dd5de041a1ffb03b489e43fb2a3279a60307566`,
+and selected `v3-r4-2048`. Both candidates passed every aggregate and
+per-variant gate. This is a normal-robustness configuration lock only; it does
+not prove anomaly detection, create a production threshold, qualify a physical
+device, or authorize another use of the current blind set.
+
 ## Physical readiness audit (2026-08-09)
 
 The offline research result was not used as a substitute for a physical-device
@@ -216,11 +253,10 @@ untouched until configuration is locked.
 
 ## Next boundary
 
-The offline software deliverables for this MVTec iteration are complete. Do
-not tune V2/2,048 from the historical locked blind AUROC, defect deltas, or
-masks. The later V3 1024 lock must likewise not trigger another use of the
-current blind set: a new blind observation requires a newly frozen held-out
-manifest. Any further configuration development must use only normal
+Do not tune V2/2,048 from the historical locked blind AUROC, defect deltas, or
+masks. The later V3 and V3-R4 locks must likewise not trigger another use of
+the current blind set: a new blind observation requires a newly frozen held-
+out manifest. Any further configuration development must use only normal
 FIT/tuning data or a separately frozen normal development envelope. Physical-
 device work remains separate and requires controlled captures, QR + ChArUco
 reference-board gates, context anchors, native capture attestation, fault
