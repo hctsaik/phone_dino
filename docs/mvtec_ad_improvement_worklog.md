@@ -335,6 +335,44 @@ after seeing the data. This is a V5-envelope normal-robustness lock only. No
 V3/V4/V5 cross-envelope selection, new blind report, or anomaly/mask access is
 authorized.
 
+## Fresh normal holdout cohort V1 (2026-08-09)
+
+The existing subset's normal images had already appeared in V3--V5 research,
+so they were not relabelled as a new holdout. A separate external-only cohort
+was instead acquired from the pinned Voxel51 MVTec mirror revision
+`30a183a3b96e3aef953f230784b123b719b09d97`. The acquisition mechanically
+filtered only `train` / `good` metadata records with no mask field for
+capsule, metal_nut, and tile. It made per-file requests only: each redirect's
+revision, raw LFS digest, and byte count were checked before download, then
+the downloaded bytes and image decoder were checked again. No category archive,
+test image, anomaly image, or ground-truth mask was downloaded.
+
+The resulting external package is
+`fresh_normal_holdout_v1` with the following frozen artifacts:
+
+| Artifact | Declared digest | File digest |
+| --- | --- | --- |
+| Historical normal-usage ledger | `sha256:38bedae2c856bdbb73d16863152bd9b5581b99dc74157648fdeb1cb8be430c10` | `sha256:fffa4b335044ecb10e749d67f195de727a639c73b3d8752d518f4ef9c084c3fc` |
+| Fresh normal candidates | `sha256:4ccabfe0deac5c090868541447a1d9c100ca23df78c3cf6f64e9c82ba9aa2b94` | `sha256:a36c23d722a7b1bc9c909654e434392cccd587a0044a80d2e67c2ad17ac7a5e6` |
+| Rehashed normal source pool | `sha256:7fa8a459864f56b8053437dadeaa1bbbc860441e0356f60063784d195e19bd68` | `sha256:ceaf874d67eea5d13ab9e10bec5ace38aea084820a2f58511a4670baf72379e6` |
+| Predeclared holdout plan | `sha256:1acd2578ff95f055120274a651722a15ee2c9fccb7b999c4f92198505e0b5e24` | `sha256:5e8121d1d5b14b74687c8e975583a03e9965ea93ed38c01c5cf743c94eca5e53` |
+| Allocated normal holdout | `sha256:51a359f5d579a99321dc33687fecc6d9a8db92fb7f921960bbb6898c23e2e74e` | `sha256:0034e045001787a6ce35042701cb470a97c03ff72117311ff7525fd5d9106b18` |
+
+The held-out manifest revalidated all 477 source bytes and contains 144 FIT,
+48 threshold-tuning, 96 normal-selection, 96 normal-confirmation, and 93
+untouched reserve records. Per category, its plan reserves 48/16/32/32
+FIT/tuning/selection/confirmation inputs, then freezes the remaining
+27/28/38 sources as reserve. The source metadata has no capture/session
+information, so its grouping claim is deliberately only `EXACT_CONTENT_ONLY`;
+it prevents identical-byte reuse but does not claim physical acquisition-group
+independence.
+
+This cohort is non-authoritative and non-production. No DINO candidate, score,
+threshold, blind report, anomaly label, or mask was used to choose its
+partition. The next standalone evaluator may tune only on its development
+partition, then make one observation-only normal-confirmation measurement; it
+must not use confirmation data to select the next augmentation.
+
 ## Physical readiness audit (2026-08-09)
 
 The offline research result was not used as a substitute for a physical-device
