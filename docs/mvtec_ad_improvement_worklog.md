@@ -451,6 +451,35 @@ partition parameter, so it cannot open those bytes. The first predeclared
 comparison will be otherwise identical 1,024- and 2,048-prototype candidates;
 a selection contract will be frozen only after both development reports exist.
 
+## Fresh normal development observations (2026-08-09)
+
+Both predeclared candidates have completed a real local-DINO development run.
+Each report passed its self-digest check, used the same feature-extractor,
+feature-input, and raw-tuning identities, and contains exactly 768 normal
+feature inputs: 144 raw FIT parents, 576 validated FIT-only children, and 48
+raw threshold-tuning images. Its evidence records zero blind or anomaly inputs;
+no selection, confirmation, reserve, mask, or anomaly bytes were opened.
+
+| Candidate | Report file digest | Report declared digest |
+| --- | --- | --- |
+| `fresh-fit-v1-r4-patch-1024` | `sha256:4878f1b075769820ba21b4f2c7765209adcb7cf78a8d449f3fe8582a57e70748` | `sha256:80a3642b6ab0d687cfb894e66303f7a2bbbd6b8ea1f4b921449f72b08871e457` |
+| `fresh-fit-v1-r4-patch-2048` | `sha256:0040b962b64a3c5517107103ba38285ac540c8d51091e974a1010cf905ea67e3` | `sha256:1b29f5f74da80be2fe12effef597e77a850e305e694eec60477cd60b843293d4` |
+
+| Candidate | capsule raw-tuning max | metal_nut raw-tuning max | tile raw-tuning max |
+| --- | ---: | ---: | ---: |
+| 1,024 prototypes | 0.341442 | 0.344680 | 0.241221 |
+| 2,048 prototypes | 0.240708 | 0.274566 | 0.234979 |
+
+These maxima are locked raw-normal calibration observations, not defect
+thresholds or production settings. The shared feature-input identity is
+`sha256:a50609605afb27e1bb90da3d9e9a762ac9e93e03c9b1029dd5808c1366bb3dc2`,
+the shared raw-tuning identity is
+`sha256:834dcb781b41302cd673ad4e495f154a2b697ea122aeefa0e13eeb9f17742190`,
+and the shared feature-extractor identity is
+`sha256:0808d305d3d8fa500274574fac0001d2ec6ad7e17645be68bcf128f6a6b82bde`.
+The next step is to freeze an explicit normal-selection contract before
+opening the untouched `NORMAL_SELECTION` partition.
+
 ## Physical readiness audit (2026-08-09)
 
 The offline research result was not used as a substitute for a physical-device
