@@ -311,3 +311,26 @@ def test_registry_reparse_is_rejected_before_contract_writes(tmp_path: Path, mon
             selection_gates=_gates(),
             selection_objective=_objective(),
         )
+
+
+def test_contract_rejects_candidates_with_different_query_batch_sizes(tmp_path: Path) -> None:
+    holdout_path, augmentation_manifest, first_report, second_report, _ = _development_reports(tmp_path)
+    contract_path = tmp_path / "selection" / "fresh_normal_selection_contract.json"
+    contract = selection.create_fresh_normal_selection_contract(
+        holdout_path,
+        augmentation_manifest,
+        [first_report, second_report],
+        contract_path,
+        selection_gates=_gates(),
+        selection_objective=_objective(),
+    )
+    mixed = json.loads(json.dumps(contract))
+    changed = mixed["candidateReports"][1]
+    changed["candidateConfiguration"]["batchSize"] = 3
+    changed["candidateConfigurationSha256"] = selection.canonical_json_sha256(changed["candidateConfiguration"])
+    mixed["candidateUniverseIdentitySha256"] = selection.canonical_json_sha256(mixed["candidateReports"])
+    mixed["contractSha256"] = selection._document_digest(mixed, "contractSha256")
+    mixed_path = tmp_path / "mixed" / "fresh_normal_selection_contract.json"
+    _write_json(mixed_path, mixed)
+    with pytest.raises(selection.FreshNormalSelectionError, match="share one batchSize"):
+        selection.load_validated_fresh_selection_contract(mixed_path)

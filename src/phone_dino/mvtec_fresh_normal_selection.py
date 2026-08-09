@@ -1257,6 +1257,10 @@ def _validate_contract_document(
         raise FreshNormalSelectionError("selection contract candidate reports use different feature inputs")
     if len({candidate["calibrationInputIdentitySha256"] for candidate in candidates}) != 1:
         raise FreshNormalSelectionError("selection contract candidate reports use different calibration inputs")
+    if len({candidate["candidateConfiguration"]["batchSize"] for candidate in candidates}) != 1:
+        raise FreshNormalSelectionError(
+            "selection contract candidates must share one batchSize so held-out queries are opened once"
+        )
     if document.get("candidateUniverseIdentitySha256") != canonical_json_sha256(candidates):
         raise FreshNormalSelectionError("selection contract candidate universe digest does not match")
     _validate_selection_gates(document.get("selectionGates"))

@@ -102,6 +102,11 @@ p95Excess = P95(selection scores) - frozen threshold
 maxExcess = max(selection scores) - frozen threshold
 ```
 
+All candidates in a contract must use the same inference batch size. Batch
+size is an execution setting rather than a selection objective, and this
+constraint guarantees that the aggregate observer decodes and embeds each
+held-out query exactly once before scoring every frozen candidate in memory.
+
 The JSON-only lock recomputes every score summary and gate from the observation
 records. It can emit `RESEARCH_CONFIGURATION_LOCKED` or
 `NO_ELIGIBLE_CONFIGURATION`, but it never promotes a configuration, changes a
