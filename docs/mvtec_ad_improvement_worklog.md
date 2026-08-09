@@ -598,6 +598,29 @@ change a threshold, gate, recipe, model, or confirmation state automatically.
 The full boundary and required safety tests are in
 [`mvtec_ad_reserve_successor_v2_protocol.md`](mvtec_ad_reserve_successor_v2_protocol.md).
 
+### Successor seal and envelope frozen
+
+The reserve-only foundation is now frozen externally after revalidating the
+complete V1 JSON chain (holdout, schema-1.1 contract/claim/receipt/
+observation/lock). These commands accept no source-image root and created no
+image observation. Their digests are:
+
+| Artifact | File digest | Declared digest |
+| --- | --- | --- |
+| Successor reserve seal | `sha256:207655336e21fdc67998fae420b5c1822d8eac6a2bef6896390634936a1aa44e` | `sha256:96198334e9a7fcfa356eea5f7ba8b9fe68d1b21eece5d0489d5d2f8bce56fbc0` |
+| Successor allocation plan | `sha256:0c021d32b1b336111c338b6b1986bdee3792c88da599cfc9144621eabd954952` | `sha256:fe423b9fc7025ba6ca997314712390772dd131a34ed11dd60d5247aa7905cd2d` |
+| Successor envelope | `sha256:a185b2f8c3ae92ea2680de11ab9eeed1142da55830fcc4473fb001dd47028787` | `sha256:8313a27a25b563ec6e875dacd2f87a0dbfd7bc6636a3b6ff10214fe6cb28398e` |
+
+The envelope binds 36 FIT, 12 raw tuning, 24 raw selection, and 21 still
+unopened successor-reserve records. Its partition identities are respectively
+`sha256:0f0df94572a3de59221c504b56a620c3aae0c84b55583bdf89c6181083290bfc`,
+`sha256:07b1d0f68940bba2eb65799d7a927fa2c7bf7407c73bb472cf542fb1592fa675`,
+`sha256:0dc2f4d969bf6e1df4d0bf7bc567e483a160e6fb65c95e2274757dd9c9df6017`,
+and `sha256:8e629392d77724ea56e4136b3c4c064675b1b98304b58bf8ed93e4d68c30c433`.
+The parent confirmation partition remains explicitly
+`PRESERVED_NOT_DELEGATED_NOT_OPENED` with 96 records. This remains an
+exploratory, not-independent parent-reserve derivation.
+
 ## Physical readiness audit (2026-08-09)
 
 The offline research result was not used as a substitute for a physical-device
