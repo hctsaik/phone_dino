@@ -1,7 +1,9 @@
-"""Replay real captures and generated alignment cases against one pinned artifact.
+"""Replay frozen alignment evidence or explicitly unverified ad-hoc cases.
 
-This diagnostic never changes the artifact or its thresholds. It exercises the
-same OpenCvTargetAligner used by the runtime and emits one JSON record per case.
+``--cohort`` is the reproducible path: it binds raw stills, saved requests and
+responses, an artifact, and a readiness snapshot before replaying the runtime
+normalizer.  The older ``--case`` path remains useful for local triage, but its
+records are deliberately labelled ``UNVERIFIED_AD_HOC``.
 """
 
 from __future__ import annotations
@@ -18,7 +20,9 @@ from phone_dino.artifacts import (
     ProductionArtifactV16,
     ProductionArtifactV17,
     ProductionArtifactV18,
+    ProductionArtifactV19,
 )
+from phone_dino.physical_alignment_replay import PhysicalAlignmentReplayError, run_cohort
 from phone_dino.production import OpenCvTargetAligner
 
 
@@ -28,14 +32,15 @@ ARTIFACT_MODELS = {
     "1.6": ProductionArtifactV16,
     "1.7": ProductionArtifactV17,
     "1.8": ProductionArtifactV18,
+    "1.9": ProductionArtifactV19,
 }
 
 
 def _load_artifact(path: Path):
-    document = json.loads(path.read_text(encoding="utf-8"))
+    document = json.loads(path.read_text(encoding="utf-8-sig"))
     model = ARTIFACT_MODELS.get(document.get("schemaVersion"))
     if model is None:
-        raise ValueError("subject-alignment replay requires artifact schema 1.4 through 1.8")
+        raise ValueError("subject-alignment replay requires artifact schema 1.4 through 1.9")
     return model.model_validate(document)
 
 
@@ -110,10 +115,29 @@ def main() -> int:
     import cv2
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--artifact", type=Path, required=True)
+    parser.add_argument("--artifact", type=Path)
+    parser.add_argument("--cohort", type=Path, help="external frozen physical-alignment cohort JSON")
+    parser.add_argument("--output", type=Path, help="new external cohort replay report JSON")
     parser.add_argument("--case", action="append", default=[], metavar="LABEL=IMAGE_PATH")
     parser.add_argument("--generated", action="store_true", help="also run deterministic generated cases")
     arguments = parser.parse_args()
+    if arguments.cohort is not None:
+        if arguments.artifact is not None or arguments.case or arguments.generated or arguments.output is None:
+            parser.error("--cohort requires --output and cannot be combined with --artifact, --case, or --generated")
+        try:
+            report = run_cohort(arguments.cohort, arguments.output)
+        except PhysicalAlignmentReplayError as error:
+            parser.error(str(error))
+        print(json.dumps({
+            "reportPath": str(arguments.output),
+            "reportSha256": report["reportSha256"],
+            "evidenceClassification": report["evidenceClassification"],
+        }, ensure_ascii=False))
+        return 2 if any(not item["expectationMet"] for item in report["cases"]) else 0
+    if arguments.output is not None:
+        parser.error("--output is only valid with --cohort")
+    if arguments.artifact is None:
+        parser.error("--artifact is required unless --cohort is used")
     if not arguments.case and not arguments.generated:
         parser.error("provide at least one --case or --generated")
 
@@ -128,6 +152,8 @@ def main() -> int:
         expectation_met = expected is None or state == expected
         failures += int(not expectation_met)
         print(json.dumps({
+            "provenance": "UNVERIFIED_AD_HOC",
+            "qualificationStatement": "NOT_PHYSICAL_QUALIFICATION_OR_PRODUCTION_AUTHORIZATION",
             "case": label,
             "expectedState": expected,
             "expectationMet": expectation_met,

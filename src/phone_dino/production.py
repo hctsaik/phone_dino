@@ -3810,6 +3810,21 @@ class ProductionAnalyzer:
             "supportedSchemas": ["1.0", "1.1", "1.2", "1.3"],
             "capabilities": [],
         }
+        if self._artifact is not None and self.settings.artifact_package_digest is not None:
+            # These are non-secret deployment facts.  A frozen replay cohort
+            # binds them to its saved /readyz bytes so it cannot silently use
+            # a looser target-only/contour fallback than the service that
+            # produced its observations.
+            metadata["replayProvenance"] = {
+                "artifactPackageDigest": self.settings.artifact_package_digest,
+                "analyzerRuntimeVersion": self._artifact.analyzer_runtime_version,
+                "allowTargetOnlyAlignment": self.settings.allow_target_only_alignment,
+                "allowContourAnchorAlignment": self.settings.engineering_contour_alignment_enabled,
+                "maxImageBytes": self.settings.max_image_bytes,
+                "maxImagePixels": self.settings.max_image_pixels,
+                "maxImageWidth": self.settings.max_image_width,
+                "maxImageHeight": self.settings.max_image_height,
+            }
         if isinstance(self._artifact, ProductionArtifactV13):
             subject = self._artifact.subject_segmentation
             metadata.update({

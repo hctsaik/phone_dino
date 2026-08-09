@@ -541,9 +541,20 @@ def target_alignment(reference):
 def test_production_analyzer_returns_version_bound_observation(tmp_path, png_bytes, manifest_factory):
     manifest = manifest_factory(png_bytes)
     client, _ = production_setup(tmp_path, manifest)
-    assert client.get("/readyz").json() == {
+    readyz = client.get("/readyz").json()
+    assert {key: readyz[key] for key in ("status", "simulation", "analysisMode", "supportedSchemas", "capabilities")} == {
         "status": "ready", "simulation": False, "analysisMode": "PRODUCTION",
         "supportedSchemas": ["1.0", "1.1", "1.2", "1.3"], "capabilities": [],
+    }
+    assert readyz["replayProvenance"] == {
+        "artifactPackageDigest": manifest["artifactPackageDigest"],
+        "analyzerRuntimeVersion": RUNTIME_DIGEST,
+        "allowTargetOnlyAlignment": False,
+        "allowContourAnchorAlignment": False,
+        "maxImageBytes": 1024 * 1024,
+        "maxImagePixels": 10000,
+        "maxImageWidth": 100,
+        "maxImageHeight": 100,
     }
 
     response = post(client, manifest, png_bytes)
@@ -562,10 +573,13 @@ def test_production_analyzer_returns_version_bound_observation(tmp_path, png_byt
 def test_engineering_real_mode_runs_production_analyzer_with_simulation_identity(tmp_path, png_bytes, manifest_factory):
     manifest = manifest_factory(png_bytes)
     client, _ = production_setup(tmp_path, manifest, engineering=True)
-    assert client.get("/readyz").json() == {
+    readyz = client.get("/readyz").json()
+    assert {key: readyz[key] for key in ("status", "simulation", "analysisMode", "supportedSchemas", "capabilities")} == {
         "status": "ready", "simulation": True, "analysisMode": "ENGINEERING_REAL_DINO",
         "supportedSchemas": ["1.0", "1.1", "1.2", "1.3"], "capabilities": [],
     }
+    assert readyz["replayProvenance"]["artifactPackageDigest"] == manifest["artifactPackageDigest"]
+    assert readyz["replayProvenance"]["analyzerRuntimeVersion"] == RUNTIME_DIGEST
 
     response = post(client, manifest, png_bytes)
 

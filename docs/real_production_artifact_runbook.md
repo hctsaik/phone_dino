@@ -92,14 +92,28 @@ The active Recipe is `PM-ABC-001` / `MC-07` / `CB-001`.
 
 The next real-world action is therefore a controlled dataset with sufficiently textured target references in the confirmed ROI, multiple normal recaptures, known abnormal cases, and angle/distance/lighting variation. A ChArUco board may be outside the frame; if so, the target reference and held-out alignment evidence must pass independently. After blind evaluation and approval, recompile a new immutable artifact with `approvalState=APPROVED`, then promote the PhoneDino artifact pin and PhoneCV profile pin together.
 
-For alignment regression triage, replay real captures and deterministic generated controls without changing the artifact or thresholds:
+For reproducible alignment regression triage, freeze an external
+`phone-dino.physical-alignment-cohort/1.0` package first. It binds every raw
+capture to its saved request/response, pinned artifact bytes, readiness
+snapshot, capture strata, and development/held-out membership. Replay it
+through the runtime-equivalent EXIF decode and ChArUco/target-only normalizer:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\replay_subject_alignment_cases.py `
-  --artifact runtime\engineering-real-dino\engineering-real-dino-artifact-v15.json `
-  --generated `
-  --case recent-pass=C:\path\to\capture-pass.jpg `
-  --case recent-fail=C:\path\to\capture-fail.jpg
+  --cohort C:\external\PM-ABC-001-alignment-r1\cohort.json `
+  --output C:\external\PM-ABC-001-alignment-r1\reports\alignment-replay.json
 ```
 
-The JSON-lines report separates alignment state, method, correlation/inlier ratio, held-out/reprojection residual, coverage, and reason codes. Generated inspection changes are expected to remain alignable so downstream anomaly observation can see them; missing targets must remain rejected. The generated perspective case is observation-only and requires Recipe-specific real-data calibration before an acceptance expectation is pinned.
+The report separates recorded and replayed alignment state, method,
+correlation/inlier ratio, held-out/reprojection residual, coverage, safe JPEG
+coding facts, and reason codes. Save `/readyz` only after the service has
+reported its `replayProvenance` block, which binds the deployed artifact,
+runtime, target-only/contour policy, and image limits used by the replay. It
+remains engineering evidence only; it is not physical qualification or
+production authorization. See
+[the cohort protocol](physical_alignment_cohort_protocol.md) for the closed
+schema and validation boundary.
+
+For a quick local check only, the legacy `--artifact --case`/`--generated`
+form remains available. Its JSON-lines output is labelled
+`UNVERIFIED_AD_HOC` and cannot substitute for a frozen cohort.
