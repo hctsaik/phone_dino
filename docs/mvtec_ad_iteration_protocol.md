@@ -4,6 +4,10 @@ The MVTec tools in this document are offline, non-commercial research only.
 They do not connect to PhoneDINO's browser-facing path, service API, artifact
 schema, QR/ChArUco process, physical measurement, or equipment decision.
 
+After V5, do not reuse this protocol's historical FIT, tuning, or blind subset
+as a fresh normal evaluation set. Create the independent external cohort in
+[the fresh normal holdout protocol](mvtec_ad_normal_holdout_protocol.md) first.
+
 ## Safe iteration loop
 
 1. Generate normal-only camera/lighting derivatives with the augmentation
