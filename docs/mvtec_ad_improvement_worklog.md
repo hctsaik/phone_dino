@@ -530,6 +530,42 @@ Its fixed selection slot is derived under the frozen cohort's
 the confirmation key is
 `sha256:9d7c4d0d512dc0e37cf6008f8d2389c5cc845b7d5487cd01857a534a8b43c110`.
 
+## Fresh normal selection observation and lock (2026-08-09)
+
+The schema-1.1 contract's fixed selection claim, receipt, aggregate
+observation, and JSON-only lock have now completed. FIT-only preflight
+succeeded before the receipt was atomically committed; the observation then
+used 720 prototype inputs (144 raw FIT plus 576 R4 FIT derivatives) and 96
+raw `NORMAL_SELECTION` queries. Evidence records zero blind, anomaly, and mask
+inputs and no persistent query cache.
+
+| Artifact | File digest | Declared digest |
+| --- | --- | --- |
+| Selection claim | `sha256:71809f0b0bc42933a7121ed6734d961300d32d9a0a2f687fb91dfaf677c1172b` | `sha256:0868b52454ad7035316823a6226f88d554cec804b8db8821edb5f260583e4a9c` |
+| Selection observation | `sha256:9d7196c882512af0fc350c35aa2040974f6c3fea3436f59c66de82be146b6cde` | `sha256:02bf7f6583f75d884cd477dd09d58a0e8a03e834bd5889416f2e7b40186690da` |
+| Selection lock | `sha256:e21006612fbfc24f4921f453a0292fe63b8dd96a2eeeadf71c38fb42546e4b14` | `sha256:cf1ba55690aa8ab6220e5dff384d16b024d680ff54a53720e7f772f898ab01a7` |
+
+The frozen gates were above-threshold rate <= 0.125, P95 excess <= 0.05, and
+maximum excess <= 0.10, independently applied per category. The normal-only
+selection metrics were:
+
+| Candidate | Category | Above rate | P95 excess | Maximum excess | Gate outcome |
+| --- | --- | ---: | ---: | ---: | --- |
+| 1,024 prototypes | capsule | 0.00000 | -0.02878 | -0.01774 | pass |
+| 1,024 prototypes | metal_nut | 0.06250 | 0.00550 | 0.01302 | pass |
+| 1,024 prototypes | tile | 0.15625 | 0.06509 | 0.07573 | fail (rate and P95) |
+| 2,048 prototypes | capsule | 0.00000 | -0.02153 | -0.01454 | pass |
+| 2,048 prototypes | metal_nut | 0.03125 | -0.00557 | 0.00688 | pass |
+| 2,048 prototypes | tile | 0.12500 | 0.07634 | 0.08838 | fail (P95) |
+
+The lock therefore records `NO_ELIGIBLE_CONFIGURATION`, with no selected
+candidate, no production promotion, and no automatic confirmation. A separate
+confirmation-claim command was intentionally refused by the JSON-only lock;
+no confirmation claim, receipt, or confirmation image observation exists.
+These results describe normal robustness under this generic augmentation
+envelope only. They do not establish anomaly-detection improvement or a
+production threshold.
+
 ## Physical readiness audit (2026-08-09)
 
 The offline research result was not used as a substitute for a physical-device
