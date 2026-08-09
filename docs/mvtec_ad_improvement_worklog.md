@@ -435,6 +435,22 @@ only reproducibility evidence for a generic normal FIT augmentation package;
 it is not a threshold change, candidate selection, anomaly-detection result,
 or production/physical qualification.
 
+## Fresh normal development evaluator implementation (2026-08-09)
+
+A standalone fresh-holdout development evaluator is now implemented. It shares
+only the local DINO model/preprocessing semantics with PhoneDINO; it does not
+import the legacy V3--V5 runner, cache, selector, report schema, or blind-set
+logic. Its closed candidate configuration binds the patch-kNN prototype limit,
+top-K, block size, batch size, and deterministic prototype-selection policy.
+
+It accepts only raw FIT, validated FIT-only derivatives, and raw
+threshold-tuning images. Per category it builds a bounded patch prototype bank,
+locks the threshold to the maximum raw tuning score, and records normal-only
+scores/provenance. The development entry point has no selection or confirmation
+partition parameter, so it cannot open those bytes. The first predeclared
+comparison will be otherwise identical 1,024- and 2,048-prototype candidates;
+a selection contract will be frozen only after both development reports exist.
+
 ## Physical readiness audit (2026-08-09)
 
 The offline research result was not used as a substitute for a physical-device

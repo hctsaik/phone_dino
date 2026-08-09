@@ -103,6 +103,9 @@ threshold, candidate selection, or confirmation observation.
 The exact FIT-only transform, package-validation, and command boundary are
 specified in [the fresh FIT-only camera augmentation protocol](mvtec_ad_fresh_fit_augmentation_protocol.md).
 
+The separate FIT-plus-raw-tuning development evaluator is specified in
+[the fresh normal-holdout evaluator protocol](mvtec_ad_fresh_normal_evaluator_protocol.md).
+
 ## Commands
 
 The commands below are examples; replace every external path with a fresh one.
