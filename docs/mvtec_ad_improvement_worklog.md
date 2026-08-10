@@ -632,7 +632,7 @@ tuning, selection, remaining-reserve, or parent-confirmation image bytes.
 | Artifact | File digest | Declared digest |
 | --- | --- | --- |
 | V2 R3 augmentation manifest | `sha256:db5a773fa5e837854aaec834c73bfd33c7586314ef78f923dd0324f83c7632d1` | `sha256:bbc62770511f9066a8fc1bb9d9da065666ad21ed3519294db9e5e09072c43e43` |
-| Closed V2 recipe | — | `sha256:aad6e5fe929a1e75ee9fc874ce1c1708870ba8b9dbf1314637152bc3be74591f` |
+| Closed V2 recipe | `sha256:aad6e5fe929a1e75ee9fc874ce1c1708870ba8b9dbf1314637152bc3be74591f` | `sha256:aad6e5fe929a1e75ee9fc874ce1c1708870ba8b9dbf1314637152bc3be74591f` |
 
 The package is bound to successor FIT identity
 `sha256:0f0df94572a3de59221c504b56a620c3aae0c84b55583bdf89c6181083290bfc`
@@ -670,9 +670,61 @@ calibration. The resulting per-category raw-tuning maxima were:
 
 The reports record a non-clean Git worktree because unrelated user-owned
 files were preserved. Their validated module/model/preprocessing hashes, not
-that worktree flag, are the binding provenance. The next action is to freeze a
-V2 selection contract before the first successor `NORMAL_SELECTION` byte is
-opened.
+that worktree flag, are the binding provenance.
+
+### V2 pushed-Git evidence anchor and one-time selection lock
+
+Before selection, the four frozen development reports were projected into the
+closed [`mvtec_ad_successor_v2_development_evidence_ledger.json`](mvtec_ad_successor_v2_development_evidence_ledger.json)
+and committed/pushed in `9506923`. The contract resolver fetches only the
+canonical `origin/master` ref into a disposable bare repository, verifies a
+regular Git blob and its ancestry, and reads raw blob bytes rather than the
+checkout. This prevents local report/ledger/contract substitution under the
+documented `PUSHED_GIT_AUDIT_ONLY` boundary.
+
+| Evidence anchor | Value |
+| --- | --- |
+| Git commit | `9506923ee2ef90a5b69481bb6b38ec2d9b3cb2b5` |
+| Git blob | `5cb438690edd5f3d5adffbbaf501acd2ff0b892f` |
+| Raw blob SHA-256 | `sha256:6462347e4573b9454f1b38f2dfc835c493faaa510075cb411fbecfb67056864a` |
+| Ledger declared digest | `sha256:d4b864ef3e7b0b1a41929f9e4e0ad9079b2fa8926f13c6a4d4640d276dc7d382` |
+| Contract projection digest | `sha256:954873a0c68ce5dc9ce73f74aace241ee856660199c54882137fe4278cebe266` |
+
+This is audit provenance, not a signed attestation: a party able to rewrite
+the configured remote ref or the executing tool can replace the baseline. A
+FIT/tuning-only deterministic replay would be required to independently prove
+that scores were honestly computed before the ledger freeze.
+
+The JSON-only contract and claim then froze one global selection slot. The
+observer revalidated FIT/R3 inputs and the feature extractor, wrote and fsynced
+the receipt, and only then opened the 24 raw successor selection images once
+for all four candidates. It reported no blind, anomaly, mask, parent
+confirmation, or remaining-reserve inputs, and retained no query cache.
+
+| Artifact | File digest | Declared digest |
+| --- | --- | --- |
+| V2 selection contract | `sha256:2e5df713f349353cda1490de07968c4e4f33e5933cedf998d1e33f34242003cf` | `sha256:51160e906cde46b7a092cc7aae4d838eddd59d6e162dfd504291fdf6fd7edffb` |
+| V2 selection claim | `sha256:dbd35e9ec883a6a549ce81add7e3efc3488337fea368cfa2285a0c7e96fb366d` | `sha256:ad1cb7dcefbdd1ea4663943ab849a576f8b0e48ecdad98d53741fa04df8fb0e9` |
+| V2 selection receipt | `sha256:cb760b317a890e7a08f4ee19d4596bc5a1359a35e64892a2a81393a1b4a4c244` | `sha256:b2e4ebbdc6560b9bfd7fb36713ce34d228605f67bd0507826766e4147380d345` |
+| V2 selection observation | `sha256:1018a4bca88bf9778ea66f6dbf85304b195052dbc147a2e8251aa775fbc1d6db` | `sha256:4b615e83afaa5b85882941b44e0e063d8ad72f313ee04f9d6ed657aa15a5184b` |
+| V2 selection lock | `sha256:4fb93dbcd19729f9fd96fd6c14a97e78fbf1b55947faed627b7c3e04b0396347` | `sha256:518ac9c0124a14d30e2c5a39dc36a5134efe68df475be3956fbef051af48853c` |
+
+The JSON-only lock is `NO_ELIGIBLE_CONFIGURATION`. All candidates failed the
+pre-registered normal-selection gates, chiefly through the capsule tail; the
+result is not an anomaly-detection conclusion.
+
+| Candidate | Gate-relevant outcome |
+| --- | --- |
+| `reserve-v2-raw-p2048-k5` | capsule 4/8 above threshold, P95/max excess `0.071562`; metal_nut 2/8 and tile 2/8 above threshold |
+| `reserve-v2-r3-p1024-k3` | capsule 4/8 above threshold, P95/max excess `0.104019` |
+| `reserve-v2-r3-p2048-k3` | capsule 4/8 above threshold, P95/max excess `0.106630`; tile 2/8 above threshold |
+| `reserve-v2-r3-p2048-k5` | capsule 4/8 above threshold, P95/max excess `0.072861`; tile 2/8 above threshold |
+
+Accordingly no confirmation claim was created, no parent confirmation image
+was opened, and the 21 remaining successor-reserve records remain untouched.
+Do not loosen these gates retrospectively or automatically consume either
+partition. Any future iteration needs a newly pre-registered envelope and a
+clearer independence/evidence boundary.
 
 ## Physical readiness audit (2026-08-09)
 
