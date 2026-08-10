@@ -48,16 +48,16 @@ commands accepts a source-image root or opens image bytes:
 ```powershell
 .venv\Scripts\python.exe tools\create_mvtec_ad_fresh_normal_successor_seal.py `
   --parent-holdout <external-v1-normal_holdout.json> `
-  --parent-selection-contract <external-v1-schema-1.1-contract.json>
+  --parent-selection-contract <external-selection_protocol_v2/fresh_normal_selection_contract.json>
 
 .venv\Scripts\python.exe tools\create_mvtec_ad_fresh_normal_successor_plan.py `
   --parent-holdout <external-v1-normal_holdout.json> `
-  --parent-selection-contract <external-v1-schema-1.1-contract.json> `
+  --parent-selection-contract <external-selection_protocol_v2/fresh_normal_selection_contract.json> `
   --output <new-external-successor-plan.json>
 
 .venv\Scripts\python.exe tools\create_mvtec_ad_fresh_normal_successor_envelope.py `
   --parent-holdout <external-v1-normal_holdout.json> `
-  --parent-selection-contract <external-v1-schema-1.1-contract.json> `
+  --parent-selection-contract <external-selection_protocol_v2/fresh_normal_selection_contract.json> `
   --plan <external-successor-plan.json> `
   --output <new-external-successor-envelope.json>
 ```
@@ -142,6 +142,130 @@ maximum category excess, maximum above-threshold rate, mean P95 excess, then
 candidate ID. A JSON-only lock may emit only
 `RESEARCH_CONFIGURATION_LOCKED` or `NO_ELIGIBLE_CONFIGURATION`; it must never
 adjust a gate, threshold, recipe, or model.
+
+## Preselection development-evidence ledger
+
+Before a selection contract can be frozen, create a JSON-only review draft of
+the exact closed candidate-binding projection. It includes the four distinct
+report identities and thresholds, common feature extractor, V2 R3 package,
+FIT-only raw/R3 prototype commitments, candidate universe, and this selection
+protocol module hash. This step validates closed JSON reports and provenance;
+it does not open selection or other source image bytes.
+
+Use the V2 parent contract at
+`selection_protocol_v2/fresh_normal_selection_contract.json` (schema 1.1),
+not the old `selection_protocol_v1` artifact:
+
+```powershell
+.venv\Scripts\python.exe tools\freeze_mvtec_ad_successor_v2_development_evidence_ledger.py `
+  --parent-holdout <external-v1-normal_holdout.json> `
+  --parent-selection-contract <external-selection_protocol_v2/fresh_normal_selection_contract.json> `
+  --plan <external-successor-plan.json> `
+  --envelope <external-successor-envelope.json> `
+  --development-report <external-raw-p2048-k5.json> `
+  --development-report <external-r3-p1024-k3.json> `
+  --development-report <external-r3-p2048-k3.json> `
+  --development-report <external-r3-p2048-k5.json> `
+  --augmentation-manifest <external-r3-manifest.json> `
+  --recipe tools\mvtec_ad_successor_fit_camera_recipe_v2.json `
+  --output <external-review-only-development-evidence-ledger.json>
+```
+
+Review the draft, then add its canonical JSON through a reviewed patch at the
+fixed repository path
+`docs/mvtec_ad_successor_v2_development_evidence_ledger.json`. The freeze CLI
+must never write that tracked path. Commit and push the ledger together with
+the selection code before any contract command is attempted.
+
+The contract and every consuming entry point use the fixed
+`PUSHED_GIT_AUDIT_ONLY` boundary: a temporary bare repository fetches only
+`https://github.com/hctsaik/phone_dino.git` at `refs/heads/master`, requires
+the recorded commit to be an ancestor of that fetched tip, resolves the fixed
+path as a regular `100644` blob, and parses the raw `git cat-file blob` bytes.
+It binds the commit OID, blob OID, raw blob SHA-256, ledger digest, and
+projection digest. The source checkout's ledger bytes and index state are not
+authority; the builder compares its raw `HEAD:path` blob with the independently
+fetched raw blob, so CRLF/filter state and unrelated dirty files cannot alter
+the ledger.
+
+This is a pushed-Git audit anchor, not a signed attestation: a party able to
+push or rewrite the required ref can replace the baseline. Replaying the
+FIT/tuning evidence is a stronger control and is outside this protocol step.
+
+## One-time selection execution
+
+After all four immutable V2 development reports exist, freeze the contract and
+claim without opening source image bytes. The contract binds the parent
+holdout/selection chain, sealed plan and envelope, the V2 R3 manifest and
+recipe, each candidate's distinct raw/R3 feature membership, every threshold,
+and the common feature-extractor identity. It also JSON-derives the FIT-only
+raw/R3 prototype commitments (36/144 inputs); the observer must match those
+commitments before it can create the selection receipt.
+
+Claim creation, observation, lock creation, and validated-lock loading each
+resolve the recorded pushed ledger again and require the contract's full
+candidate-binding projection and `selectionProtocolModuleSha256` to match
+before a slot is read or written or any source input can be opened.
+
+Development execution environment, entrypoint provenance, and timings remain
+informational audit metadata. The selection decision binds the frozen
+`featureExtractor` identity and hashes, not mutable environment or timing
+values.
+
+```powershell
+.venv\Scripts\python.exe tools\create_mvtec_ad_successor_v2_selection_contract.py `
+  --parent-holdout <external-v1-normal_holdout.json> `
+  --parent-selection-contract <external-selection_protocol_v2/fresh_normal_selection_contract.json> `
+  --plan <external-successor-plan.json> `
+  --envelope <external-successor-envelope.json> `
+  --development-report <external-raw-p2048-k5.json> `
+  --development-report <external-r3-p1024-k3.json> `
+  --development-report <external-r3-p2048-k3.json> `
+  --development-report <external-r3-p2048-k5.json> `
+  --augmentation-manifest <external-r3-manifest.json> `
+  --recipe tools\mvtec_ad_successor_fit_camera_recipe_v2.json `
+  --development-evidence-ledger docs\mvtec_ad_successor_v2_development_evidence_ledger.json `
+  --output <new-external-successor-v2-selection-contract.json>
+
+.venv\Scripts\python.exe tools\create_mvtec_ad_successor_v2_selection_claim.py `
+  --parent-holdout <external-v1-normal_holdout.json> `
+  --parent-selection-contract <external-selection_protocol_v2/fresh_normal_selection_contract.json> `
+  --plan <external-successor-plan.json> `
+  --envelope <external-successor-envelope.json> `
+  --contract <external-successor-v2-selection-contract.json>
+```
+
+The observer validates/re-renders only successor FIT/R3 prototype inputs,
+durably reserves the parent-registry receipt slot with an exclusive create and
+`fsync`, and only then opens the 24 raw successor `NORMAL_SELECTION` images
+once for all four candidates. It never opens parent confirmation, remaining
+reserve, tuning, historical, blind, anomaly, or mask image bytes. Slots are
+derived from the parent `partition_access` root, parent-holdout digests, and
+the successor selection identity, so copying a contract cannot create another
+tool-mediated attempt.
+
+```powershell
+.venv\Scripts\python.exe tools\run_mvtec_ad_successor_v2_selection_observation.py `
+  --parent-holdout <external-v1-normal_holdout.json> `
+  --parent-selection-contract <external-selection_protocol_v2/fresh_normal_selection_contract.json> `
+  --plan <external-successor-plan.json> `
+  --envelope <external-successor-envelope.json> `
+  --contract <external-successor-v2-selection-contract.json> `
+  --augmentation-manifest <external-r3-manifest.json> `
+  --recipe tools\mvtec_ad_successor_fit_camera_recipe_v2.json `
+  --source-root <external-parent-source-bytes>
+
+.venv\Scripts\python.exe tools\create_mvtec_ad_successor_v2_selection_lock.py `
+  --parent-holdout <external-v1-normal_holdout.json> `
+  --parent-selection-contract <external-selection_protocol_v2/fresh_normal_selection_contract.json> `
+  --plan <external-successor-plan.json> `
+  --envelope <external-successor-envelope.json> `
+  --contract <external-successor-v2-selection-contract.json>
+```
+
+The lock is JSON-only and never creates a confirmation claim. In particular,
+`NO_ELIGIBLE_CONFIGURATION` opens neither parent confirmation nor remaining
+reserve images.
 
 ## Final confirmation boundary
 

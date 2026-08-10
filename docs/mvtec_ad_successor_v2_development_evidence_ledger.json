@@ -1,0 +1,201 @@
+{
+  "authoritative": false,
+  "blindPolicy": "NO_BLIND_OR_ANOMALY_DATA",
+  "contractBindingProjection": {
+    "augmentation": {
+      "manifestDeclaredSha256": "sha256:bbc62770511f9066a8fc1bb9d9da065666ad21ed3519294db9e5e09072c43e43",
+      "manifestFileSha256": "sha256:db5a773fa5e837854aaec834c73bfd33c7586314ef78f923dd0324f83c7632d1",
+      "recipeFileSha256": "sha256:aad6e5fe929a1e75ee9fc874ce1c1708870ba8b9dbf1314637152bc3be74591f",
+      "successorFitIdentitySha256": "sha256:0f0df94572a3de59221c504b56a620c3aae0c84b55583bdf89c6181083290bfc",
+      "variantsPerParent": 3
+    },
+    "candidateBindings": [
+      {
+        "augmentationManifestDeclaredSha256": null,
+        "augmentationManifestFileSha256": null,
+        "augmentationRecipeFileSha256": null,
+        "calibrationInputIdentitySha256": "sha256:d8a756345befb05db0f163c180ad65d048b740bf228a7b18618d0e4e5925e31c",
+        "candidateConfiguration": {
+          "algorithmId": "DINOV2_PATCH_NEAREST_NORMAL_COSINE_TOPK_V2",
+          "batchSize": 4,
+          "id": "reserve-v2-raw-p2048-k5",
+          "maxPrototypePatches": 2048,
+          "memoryBankSelection": "DETERMINISTIC_STRATIFIED_HASH_RANKED_PATCH_PREFIX_V2",
+          "prototypeBlockSize": 256,
+          "prototypeInputPolicy": "RAW_FIT_ONLY",
+          "topKMostAnomalousPatches": 5
+        },
+        "candidateConfigurationSha256": "sha256:4d1c7f59bb7262e6a1a31a05854331e5adc446db956794812f6d391cbabe06b5",
+        "candidateId": "reserve-v2-raw-p2048-k5",
+        "developmentReportDeclaredSha256": "sha256:285768da0f1b23fb152288001ece5d638ca6896dd009793763720dbafd6c1312",
+        "developmentReportFileSha256": "sha256:7133e8447cd8b84cd296bbe8a7e46c8cd665d01388bfc3fdb42bb6922e8eb09d",
+        "featureExtractorIdentitySha256": "sha256:9b0d657ab6df9cc3f365f456713d6115f1e870d0dbd38a48541b5177b506037a",
+        "featureInputIdentitySha256": "sha256:960cd56f2c92d6a80ef5b9aad46514551ff2bc590edf1209774c63c46ee4cc9d",
+        "prototypeInputPolicy": "RAW_FIT_ONLY",
+        "thresholds": {
+          "capsule": 0.14254161715507507,
+          "metal_nut": 0.18290331959724426,
+          "tile": 0.19181133806705475
+        },
+        "thresholdsIdentitySha256": "sha256:b5b5522576dd03e6192a648594e76f3b94d6466a83e89975b559a59c6bef1297"
+      },
+      {
+        "augmentationManifestDeclaredSha256": "sha256:bbc62770511f9066a8fc1bb9d9da065666ad21ed3519294db9e5e09072c43e43",
+        "augmentationManifestFileSha256": "sha256:db5a773fa5e837854aaec834c73bfd33c7586314ef78f923dd0324f83c7632d1",
+        "augmentationRecipeFileSha256": "sha256:aad6e5fe929a1e75ee9fc874ce1c1708870ba8b9dbf1314637152bc3be74591f",
+        "calibrationInputIdentitySha256": "sha256:d8a756345befb05db0f163c180ad65d048b740bf228a7b18618d0e4e5925e31c",
+        "candidateConfiguration": {
+          "algorithmId": "DINOV2_PATCH_NEAREST_NORMAL_COSINE_TOPK_V2",
+          "batchSize": 4,
+          "id": "reserve-v2-r3-p1024-k3",
+          "maxPrototypePatches": 1024,
+          "memoryBankSelection": "DETERMINISTIC_STRATIFIED_HASH_RANKED_PATCH_PREFIX_V2",
+          "prototypeBlockSize": 256,
+          "prototypeInputPolicy": "RAW_FIT_PLUS_AUGMENTATION_R3",
+          "topKMostAnomalousPatches": 3
+        },
+        "candidateConfigurationSha256": "sha256:3fd4173b317aacd173a8dd76f65d31ac82babd840c77b37c3df838507ebe20b9",
+        "candidateId": "reserve-v2-r3-p1024-k3",
+        "developmentReportDeclaredSha256": "sha256:a97a8a049463eea537b65d7a0d5d6e2076fdbd1d393c52bf73744746ce39de64",
+        "developmentReportFileSha256": "sha256:d23c9e241e2ef8f3ca8af3aaab368c25a722b94d7e80bee3057b8fe71e27a0bf",
+        "featureExtractorIdentitySha256": "sha256:9b0d657ab6df9cc3f365f456713d6115f1e870d0dbd38a48541b5177b506037a",
+        "featureInputIdentitySha256": "sha256:dec3fb5755df7983a61e919b0eaef6e1196f94430c2c47f81d96c1557dae0902",
+        "prototypeInputPolicy": "RAW_FIT_PLUS_AUGMENTATION_R3",
+        "thresholds": {
+          "capsule": 0.1945771425962448,
+          "metal_nut": 0.2631233334541321,
+          "tile": 0.24208426475524902
+        },
+        "thresholdsIdentitySha256": "sha256:d2cf4c324ba8cd859e5be8cc19d3c9800c7cc551f71825082ee1e86b73fc0259"
+      },
+      {
+        "augmentationManifestDeclaredSha256": "sha256:bbc62770511f9066a8fc1bb9d9da065666ad21ed3519294db9e5e09072c43e43",
+        "augmentationManifestFileSha256": "sha256:db5a773fa5e837854aaec834c73bfd33c7586314ef78f923dd0324f83c7632d1",
+        "augmentationRecipeFileSha256": "sha256:aad6e5fe929a1e75ee9fc874ce1c1708870ba8b9dbf1314637152bc3be74591f",
+        "calibrationInputIdentitySha256": "sha256:d8a756345befb05db0f163c180ad65d048b740bf228a7b18618d0e4e5925e31c",
+        "candidateConfiguration": {
+          "algorithmId": "DINOV2_PATCH_NEAREST_NORMAL_COSINE_TOPK_V2",
+          "batchSize": 4,
+          "id": "reserve-v2-r3-p2048-k3",
+          "maxPrototypePatches": 2048,
+          "memoryBankSelection": "DETERMINISTIC_STRATIFIED_HASH_RANKED_PATCH_PREFIX_V2",
+          "prototypeBlockSize": 256,
+          "prototypeInputPolicy": "RAW_FIT_PLUS_AUGMENTATION_R3",
+          "topKMostAnomalousPatches": 3
+        },
+        "candidateConfigurationSha256": "sha256:759ce630f61e729243a7341886652524d183a850c337f598a5ed64d14b3e12be",
+        "candidateId": "reserve-v2-r3-p2048-k3",
+        "developmentReportDeclaredSha256": "sha256:17ab746b1e5a5c06ad66c8a9697e501895f915385b34e2999a5809a0b9962210",
+        "developmentReportFileSha256": "sha256:436a81d66ae5edd7b335e56a946d97b7909c7cd6c5fa4d4e7f7054a806eba709",
+        "featureExtractorIdentitySha256": "sha256:9b0d657ab6df9cc3f365f456713d6115f1e870d0dbd38a48541b5177b506037a",
+        "featureInputIdentitySha256": "sha256:dec3fb5755df7983a61e919b0eaef6e1196f94430c2c47f81d96c1557dae0902",
+        "prototypeInputPolicy": "RAW_FIT_PLUS_AUGMENTATION_R3",
+        "thresholds": {
+          "capsule": 0.16235798597335815,
+          "metal_nut": 0.23756706714630127,
+          "tile": 0.2117512822151184
+        },
+        "thresholdsIdentitySha256": "sha256:c3d9ecd9fc3c77ec0e5f4a86144bdec872aadb08bdfb4ff6dec45a48bd8ec1f0"
+      },
+      {
+        "augmentationManifestDeclaredSha256": "sha256:bbc62770511f9066a8fc1bb9d9da065666ad21ed3519294db9e5e09072c43e43",
+        "augmentationManifestFileSha256": "sha256:db5a773fa5e837854aaec834c73bfd33c7586314ef78f923dd0324f83c7632d1",
+        "augmentationRecipeFileSha256": "sha256:aad6e5fe929a1e75ee9fc874ce1c1708870ba8b9dbf1314637152bc3be74591f",
+        "calibrationInputIdentitySha256": "sha256:d8a756345befb05db0f163c180ad65d048b740bf228a7b18618d0e4e5925e31c",
+        "candidateConfiguration": {
+          "algorithmId": "DINOV2_PATCH_NEAREST_NORMAL_COSINE_TOPK_V2",
+          "batchSize": 4,
+          "id": "reserve-v2-r3-p2048-k5",
+          "maxPrototypePatches": 2048,
+          "memoryBankSelection": "DETERMINISTIC_STRATIFIED_HASH_RANKED_PATCH_PREFIX_V2",
+          "prototypeBlockSize": 256,
+          "prototypeInputPolicy": "RAW_FIT_PLUS_AUGMENTATION_R3",
+          "topKMostAnomalousPatches": 5
+        },
+        "candidateConfigurationSha256": "sha256:000853156db759ee5911fccde7df3840a82afc63b1935adbd7a8cee2247cba2f",
+        "candidateId": "reserve-v2-r3-p2048-k5",
+        "developmentReportDeclaredSha256": "sha256:d3b6fd751e9e9780226f690acc529b2a9fe00862b5cae1b136970aadd6b464dc",
+        "developmentReportFileSha256": "sha256:b2b108b032b1fc524bc54be92a052b9c692683e3cad7a78eb59f814334a3c92e",
+        "featureExtractorIdentitySha256": "sha256:9b0d657ab6df9cc3f365f456713d6115f1e870d0dbd38a48541b5177b506037a",
+        "featureInputIdentitySha256": "sha256:dec3fb5755df7983a61e919b0eaef6e1196f94430c2c47f81d96c1557dae0902",
+        "prototypeInputPolicy": "RAW_FIT_PLUS_AUGMENTATION_R3",
+        "thresholds": {
+          "capsule": 0.14951397478580475,
+          "metal_nut": 0.19973228871822357,
+          "tile": 0.19445638358592987
+        },
+        "thresholdsIdentitySha256": "sha256:8c02102c9d67b0a44000bf23898e548932e7f9f133d6dbc0a7a7f8c81e922a6c"
+      }
+    ],
+    "candidateUniverseIdentitySha256": "sha256:0af7b5bf6b6fd610b620f75d1de2b5108e93a4557bfd5e1ac24629971b26be5e",
+    "featureExtractor": {
+      "device": "cpu",
+      "enginesModuleSha256": "sha256:5168bba8d8cce62e72e57b3b25ad610090e76a605433606bc791817e8e0148ad",
+      "evaluatorModuleSha256": "sha256:4be3b1cb1220f2a989d62ae5afc3dff6d5f9d027a272731da22f1e395c91ddff",
+      "modelEntrypoint": "dinov2_vits14",
+      "modelRepositorySha256": "sha256:aacb05bcc2a5a51135966a005eda5ca323dfe412bd78c06fba606461338e3246",
+      "modelWeightsSha256": "sha256:b938bf1bc15cd2ec0feacfe3a1bb553fe8ea9ca46a7e1d8d00217f29aef60cd9",
+      "numpyVersion": "2.4.6",
+      "pillowVersion": "11.3.0",
+      "preprocessing": {
+        "centerCropHeight": 224,
+        "centerCropWidth": 224,
+        "colorSpace": "RGB",
+        "normalizeMean": [
+          0.485,
+          0.456,
+          0.406
+        ],
+        "normalizeStd": [
+          0.229,
+          0.224,
+          0.225
+        ],
+        "resizeAntialias": true,
+        "resizeShortEdge": 256
+      },
+      "preprocessingId": "DINOV2_RESIZE_SHORT_EDGE_256_CENTER_CROP_224_IMAGENET_NORMALIZE_V1",
+      "productionModuleSha256": "sha256:cedc1ae4339795cfe136b4d668c3b2720005454bf02a45d49076b57f809036f8",
+      "pythonVersion": "3.11.9",
+      "schemaVersion": "phone-dino.mvtec-ad-successor-v2-feature-extractor/1.0",
+      "successorAugmentationModuleSha256": "sha256:08faa908b89140ed33c05099d3281367ee981105763b6d853f79b9ac9d592069",
+      "successorModuleSha256": "sha256:c5ba9a0a9b33bc35e6175f3ded8e23949a49512b33a4ac3fd7b25c620ab61427",
+      "torchBackend": {
+        "deterministicAlgorithmsEnabled": false,
+        "mkldnnAvailable": true,
+        "mkldnnEnabled": true
+      },
+      "torchThreadCount": 8,
+      "torchVersion": "2.13.0+cpu",
+      "torchvisionVersion": "0.28.0+cpu"
+    },
+    "featureExtractorIdentitySha256": "sha256:9b0d657ab6df9cc3f365f456713d6115f1e870d0dbd38a48541b5177b506037a",
+    "prototypeInputCounts": {
+      "RAW_FIT_ONLY": 36,
+      "RAW_FIT_PLUS_AUGMENTATION_R3": 144
+    },
+    "prototypeInputIdentities": {
+      "RAW_FIT_ONLY": "sha256:d737c9f3379ce0400a3b2ce1e2d0b376881cdba9b69157b1925b31a6044164dd",
+      "RAW_FIT_PLUS_AUGMENTATION_R3": "sha256:3aec1f063d5d65868513043d6578ec3afd1640812dfac243cdfa0972aa86ee21"
+    },
+    "selectionProtocolModuleSha256": "sha256:b14aa77a501ff94b2476df716c323343b8f3dd30794f2eb2a2b0afd1e6ed8f75"
+  },
+  "contractBindingProjectionSha256": "sha256:954873a0c68ce5dc9ce73f74aace241ee856660199c54882137fe4278cebe266",
+  "delegationPolicy": "TOOL_MEDIATED_UNCONSUMED_ONLY",
+  "developmentEvidenceLedgerSha256": "sha256:d4b864ef3e7b0b1a41929f9e4e0ad9079b2fa8926f13c6a4d4640d276dc7d382",
+  "independenceLabel": "NOT_INDEPENDENT_PARENT_RESERVE_DERIVATION",
+  "ledgerScope": "PRESELECTION_FROZEN_SUCCESSOR_V2_CONTRACT_BINDINGS",
+  "phase": "SUCCESSOR_V2_PRESELECTION_DEVELOPMENT_EVIDENCE",
+  "productionAuthorized": false,
+  "purpose": "OFFLINE_MVTEC_RESERVE_SUCCESSOR_V2_PRESELECTION_DEVELOPMENT_EVIDENCE",
+  "resultLabel": "EXPLORATORY_NOT_INDEPENDENT",
+  "schemaVersion": "phone-dino.mvtec-ad-reserve-successor-v2-development-evidence-ledger/1.0",
+  "selectionInput": {
+    "defect": "good",
+    "kind": "NOMINAL",
+    "oneTimeClaimRequired": true,
+    "partition": "NORMAL_SELECTION",
+    "rawOnly": true
+  },
+  "trustMode": "PUSHED_GIT_AUDIT_ONLY"
+}
