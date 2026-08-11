@@ -730,9 +730,10 @@ clearer independence/evidence boundary.
 
 The separate [`synthetic-only protocol`](mvtec_ad_synthetic_anomaly_test_protocol.md)
 was added as an engineering test harness, not a successor-selection retry. It
-uses the already permitted successor V2 `FIT` normal bytes only; it does not
-open `THRESHOLD_TUNING`, `NORMAL_SELECTION`, `NORMAL_CONFIRMATION`, remaining
-reserve, blind, true-anomaly, or mask image bytes. It does not create a claim,
+uses only normal bytes allocated to the sealed successor envelope's `FIT`
+partition; it does not open `THRESHOLD_TUNING`, `NORMAL_SELECTION`,
+`NORMAL_CONFIRMATION`, remaining reserve, blind, true-anomaly, or mask image
+bytes. It does not create a claim,
 receipt, observation, or lock in the V1/V2 selection registries and does not
 change the `NO_ELIGIBLE_CONFIGURATION` result above.
 
@@ -777,10 +778,11 @@ with the same source/model identity and fixed test rule.
 
 The separate [`synthetic-stress V2 protocol`](mvtec_ad_synthetic_stress_v2_protocol.md)
 extends the engineering harness without reopening or modifying the V1 result.
-It uses only the successor V2 `FIT` normal parents, has no V1-report input, and
-opens no `THRESHOLD_TUNING`, `NORMAL_SELECTION`, `NORMAL_CONFIRMATION`, reserve,
-blind, true-anomaly, or mask image bytes. It creates no selection-registry
-artifact and cannot change the locked `NO_ELIGIBLE_CONFIGURATION` outcome.
+It uses only normal parents allocated to the sealed successor envelope's `FIT`
+partition, has no V1-report input, and opens no `THRESHOLD_TUNING`,
+`NORMAL_SELECTION`, `NORMAL_CONFIRMATION`, reserve, blind, true-anomaly, or
+mask image bytes. It creates no selection-registry artifact and cannot change
+the locked `NO_ELIGIBLE_CONFIGURATION` outcome.
 
 The same immutable 6 / 2 / 4 FIT split per category provided raw prototypes,
 raw calibration parents, and raw query parents. Before the V2 package was
