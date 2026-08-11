@@ -773,6 +773,46 @@ wall-clock field and is deliberately not used for this worklog entry. The
 recorded `r2` report uses process CPU time (66.30 seconds total) and completed
 with the same source/model identity and fixed test rule.
 
+### Post-V1 synthetic-stimulus stress V2 (2026-08-12)
+
+The separate [`synthetic-stress V2 protocol`](mvtec_ad_synthetic_stress_v2_protocol.md)
+extends the engineering harness without reopening or modifying the V1 result.
+It uses only the successor V2 `FIT` normal parents, has no V1-report input, and
+opens no `THRESHOLD_TUNING`, `NORMAL_SELECTION`, `NORMAL_CONFIRMATION`, reserve,
+blind, true-anomaly, or mask image bytes. It creates no selection-registry
+artifact and cannot change the locked `NO_ELIGIBLE_CONFIGURATION` outcome.
+
+The same immutable 6 / 2 / 4 FIT split per category provided raw prototypes,
+raw calibration parents, and raw query parents. Before the V2 package was
+loaded, the test froze each category threshold as the maximum of its two raw
+calibration scores. Only the 12 query parents were rendered as the fixed
+3-family x 3-level matrix (`LOCAL_SCRATCH`, `LOCAL_SPOT`, `LOCAL_OCCLUSION` x
+`SUBTLE`, `MODERATE`, `PRONOUNCED`), yielding 108 byte-hashed, deterministic
+PNG stimuli. Package validation re-rendered every child before scoring.
+
+| Artifact | File digest | Declared digest |
+| --- | --- | --- |
+| Synthetic-stress V2 package manifest | `sha256:f79f13e26fd7cafba1a17756530622103d6d6e07d0d32a476ddc59d814e20016` | `sha256:9e2f6db244e76ed4bff43c6771c541cd0ad11ca8b8209fbeb5c8c9e31e8fd73f` |
+| Closed synthetic-stress V2 recipe | `sha256:3d258a09d12d5510b16c43cdbe36bc2c65be3f1558662cb21b45504c753bc72a` | same file digest |
+| Synthetic-stress V2 response report | `sha256:2d580769eddd0db2d8044049a9a71b95a7551d807c4487d25ee83e9d685672fd` | `sha256:9a98570d6977a27c6909b3496c3e9282a91df1d0dcec1209fa5a8530760aaea1` |
+
+This is a response-only observation, not a classifier evaluation. Of 12 raw
+query normals, 4 were above their frozen raw-calibration threshold (33.33%).
+Of 108 synthetic stimuli, 97 were above it (89.81%); 104 / 108 paired stimulus
+scores increased relative to their raw parent, with mean child-minus-parent
+score `0.261049`. Per category the synthetic-stimulus response was 32 / 36
+for capsule, 30 / 36 for metal_nut, and 35 / 36 for tile. By render level it
+was 27 / 36 subtle, 35 / 36 moderate, and 35 / 36 pronounced.
+
+The report is explicitly `SYNTHETIC_STIMULUS_RESPONSE_ONLY` with
+`realAnomalyPerformance: NOT_ESTIMATED` and `realPrecisionRecall:
+NOT_ESTIMATED`. It deliberately contains no TP/FP/FN/TN, precision, recall,
+F1, AUROC, AP, V1-versus-V2 comparison, or promotion result. It forbids model,
+algorithm, hyperparameter, threshold, or package selection; production
+validation; and physical qualification. The result only shows this frozen DINO
+configuration's response to these programmatic overlays, which are paired and
+not observed physical defects.
+
 ## Physical readiness audit (2026-08-09)
 
 The offline research result was not used as a substitute for a physical-device
