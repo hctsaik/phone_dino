@@ -1,0 +1,113 @@
+{
+  "authoritative": false,
+  "comparisonOrPromotionAllowed": false,
+  "description": "Closed post-V1 synthetic-only offline MVTec stress recipe. It renders deterministic subtle, moderate, and pronounced local scratch, spot, and occlusion stimuli on successor FIT nominal parents solely to exercise an engineering test harness. The stimuli are not observed defects, do not model physical failure mechanisms, have no real-anomaly ground truth, and must not be used for comparison, promotion, qualification, threshold selection, release decisions, or production authorization.",
+  "id": "SYNTHETIC_ONLY_STRESS_LEVELS_V2_PNG",
+  "outputEncoding": {
+    "compressLevel": 9,
+    "format": "PNG",
+    "mode": "RGB",
+    "optimize": false
+  },
+  "postV1Exploratory": true,
+  "productionAuthorized": false,
+  "purpose": "OFFLINE_MVTEC_SYNTHETIC_ONLY_POST_V1_EXPLORATORY_STRESS_TESTING",
+  "samplingAlgorithm": "NAMED_SHA256_SYNTHETIC_STRESS_SUBSTREAMS_V2",
+  "schemaVersion": "phone-dino.mvtec-ad-synthetic-only-stress-recipe/2.0",
+  "stimulusProfiles": {
+    "MODERATE": {
+      "LOCAL_OCCLUSION": {
+        "centerMarginFraction": 0.22,
+        "maxCornerRadiusFraction": 0.08,
+        "maxHeightFraction": 0.18,
+        "maxOpacity": 0.76,
+        "maxWidthFraction": 0.22,
+        "minCornerRadiusFraction": 0.025,
+        "minHeightFraction": 0.08,
+        "minOpacity": 0.46,
+        "minWidthFraction": 0.1
+      },
+      "LOCAL_SCRATCH": {
+        "centerMarginFraction": 0.22,
+        "maxLengthFraction": 0.27,
+        "maxOpacity": 0.75,
+        "maxWidthFraction": 0.022,
+        "minLengthFraction": 0.12,
+        "minOpacity": 0.45,
+        "minWidthFraction": 0.007
+      },
+      "LOCAL_SPOT": {
+        "centerMarginFraction": 0.22,
+        "maxOpacity": 0.72,
+        "maxRadiusFraction": 0.14,
+        "maxSoftnessFraction": 0.05,
+        "minOpacity": 0.38,
+        "minRadiusFraction": 0.055,
+        "minSoftnessFraction": 0.01
+      }
+    },
+    "PRONOUNCED": {
+      "LOCAL_OCCLUSION": {
+        "centerMarginFraction": 0.22,
+        "maxCornerRadiusFraction": 0.09,
+        "maxHeightFraction": 0.24,
+        "maxOpacity": 0.96,
+        "maxWidthFraction": 0.3,
+        "minCornerRadiusFraction": 0.03,
+        "minHeightFraction": 0.12,
+        "minOpacity": 0.76,
+        "minWidthFraction": 0.14
+      },
+      "LOCAL_SCRATCH": {
+        "centerMarginFraction": 0.22,
+        "maxLengthFraction": 0.42,
+        "maxOpacity": 0.98,
+        "maxWidthFraction": 0.035,
+        "minLengthFraction": 0.18,
+        "minOpacity": 0.75,
+        "minWidthFraction": 0.012
+      },
+      "LOCAL_SPOT": {
+        "centerMarginFraction": 0.22,
+        "maxOpacity": 0.92,
+        "maxRadiusFraction": 0.2,
+        "maxSoftnessFraction": 0.055,
+        "minOpacity": 0.55,
+        "minRadiusFraction": 0.09,
+        "minSoftnessFraction": 0.01
+      }
+    },
+    "SUBTLE": {
+      "LOCAL_OCCLUSION": {
+        "centerMarginFraction": 0.22,
+        "maxCornerRadiusFraction": 0.07,
+        "maxHeightFraction": 0.115,
+        "maxOpacity": 0.5,
+        "maxWidthFraction": 0.135,
+        "minCornerRadiusFraction": 0.02,
+        "minHeightFraction": 0.05,
+        "minOpacity": 0.24,
+        "minWidthFraction": 0.06
+      },
+      "LOCAL_SCRATCH": {
+        "centerMarginFraction": 0.22,
+        "maxLengthFraction": 0.16,
+        "maxOpacity": 0.46,
+        "maxWidthFraction": 0.011,
+        "minLengthFraction": 0.08,
+        "minOpacity": 0.2,
+        "minWidthFraction": 0.004
+      },
+      "LOCAL_SPOT": {
+        "centerMarginFraction": 0.22,
+        "maxOpacity": 0.44,
+        "maxRadiusFraction": 0.08,
+        "maxSoftnessFraction": 0.045,
+        "minOpacity": 0.16,
+        "minRadiusFraction": 0.03,
+        "minSoftnessFraction": 0.01
+      }
+    }
+  },
+  "syntheticOnly": true
+}
