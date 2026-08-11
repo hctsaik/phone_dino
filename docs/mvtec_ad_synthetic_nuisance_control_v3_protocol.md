@@ -52,6 +52,11 @@ belong to the fixed 12 query parents; all other R3 child images remain out of
 scope. The V2 package is required to cover every query parent / family / level
 combination.
 
+Preflight must address only the explicitly supplied paths. It must never
+recursively enumerate or byte-hash an external cohort root to discover an
+artifact: hashing an image is itself image-byte access and invalidates any
+claim that a supposedly held-out partition remained untouched.
+
 ## One-time registry receipt
 
 `--registry-root` is an external persistent directory, not a Git directory.

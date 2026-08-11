@@ -820,6 +820,47 @@ production validation; and physical qualification. They show only this frozen
 DINO configuration's response to paired programmatic overlays, not observed
 physical defects.
 
+### Hardened V2-r2 reissue and V3 disposition (2026-08-12)
+
+V2-r1 was retained unchanged as historical schema-2.0 evidence. A separately
+generated V2-r2 package and schema-2.1 response-only report then re-ran the
+same fixed stimulus design with a sealed, cache-free DINO snapshot, an
+externally retained snapshot-manifest pin, strict score/summary reconciliation,
+and metadata-only package binding. It remains an engineering response
+observation, not an independent confirmation or a real-defect evaluation.
+
+| Artifact | File digest | Declared digest |
+| --- | --- | --- |
+| V2-r2 synthetic-stress package manifest | `sha256:0d4c3d0825fc4f9b25e921c47e0bf33a3fb5615896c2ad8ff511317d64e56511` | `sha256:3fb95c6f104ae8a7bc14f1f6574725ac11753372b0b5e0833b37024deb71557c` |
+| V2-r2 response report | `sha256:f745e449f2e770dc68c9424dddff8a5ab8d9a7bfcce805dcd7b1c1ca4ed14625` | `sha256:40f860d82853585d5380e19508f870da89c8890280e81bf307dcc95200bee435` |
+| Sealed DINO snapshot manifest | `sha256:7f4579534a9c30263212c05b29ffc7f9c180e65495d5202573b95058d11892b2` | `sha256:d3b8614f2ddc97cf507c29518537232bfa3ad302f058be0d862ba71edee53dea` |
+
+The sealed snapshot used repository source digest
+`sha256:e3ba222bcc948f73a43e1f37320f64c209f5b1f05e682b8a1f4b7a184bfc4015`,
+weights digest
+`sha256:b938bf1bc15cd2ec0feacfe3a1bb553fe8ea9ca46a7e1d8d00217f29aef60cd9`,
+and a report-bound snapshot-guard digest
+`sha256:696718900f71fd9319c1c1b4a74d02a5916616b3f94e219a50d94e9e1d030bb7`.
+The legacy evaluator's model-directory digest is a different named algorithm
+and is deliberately not treated as equal to the sealed repository digest.
+
+The r2 response was 4 / 12 raw query normals and 97 / 108 synthetic stimuli
+above their frozen raw-calibration thresholds. The paired child-minus-parent
+mean was `0.261049` (104 / 108 positive deltas). The report explicitly records
+`realAnomalyPerformance: NOT_ESTIMATED`,
+`realPrecisionRecall: NOT_ESTIMATED`, and
+`evidenceClass: SYNTHETIC_ENGINEERING_ONLY`; none of these values is precision,
+recall, or real anomaly performance.
+
+The planned V3 nuisance-control observation was **not run**. During a
+preflight, an erroneous recursive byte-hash command was issued against the
+external cohort root. Its output cannot establish the exact set of files it
+read, so the strict untouched-image boundary for that cohort can no longer be
+asserted. No V3 receipt, report, or selection artifact was created, and this
+cohort will not be used to claim an independent V3 control result. A future
+strict V3 observation requires a newly controlled source cohort; the protocol
+now explicitly forbids recursive cohort discovery or hashing during preflight.
+
 ## Physical readiness audit (2026-08-09)
 
 The offline research result was not used as a substitute for a physical-device
