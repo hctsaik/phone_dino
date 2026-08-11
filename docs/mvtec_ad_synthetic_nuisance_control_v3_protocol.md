@@ -61,7 +61,8 @@ validate the incident and parent manifest through JSON-only paths before any
 output slot, receipt, model work, FIT loader, query image, or child image can
 be opened, and compile the known cohort identity into the guard. Missing,
 replaced, or self-consistent forged incident records therefore fail closed and
-cannot re-enable this cohort. No future controlled cohort may use this V3
+cannot re-enable this cohort. The direct API repeats the JSON-only check
+immediately before it hands the parent path to the FIT loader. No future controlled cohort may use this V3
 implementation: it is hard-bound to the old successor evidence chain. Any
 recovery requires a separately designed and preregistered V4 protocol.
 

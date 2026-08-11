@@ -477,6 +477,37 @@ def test_v3_quarantine_rejection_precedes_fit_loader_receipt_and_output(
     assert not (tmp_path / "registry").exists()
 
 
+def test_v3_rechecks_quarantine_immediately_before_the_fit_loader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checks: list[str] = []
+
+    def guard(*_args: object, **_kwargs: object) -> tuple[str, str]:
+        checks.append("quarantine")
+        if len(checks) == 2:
+            raise audit.quarantine.CohortQuarantineError("parent manifest changed during model preflight")
+        return _digest("fixture-holdout-file"), _digest("fixture-holdout-declared")
+
+    def install_guard(_registry: Path) -> None:
+        monkeypatch.setattr(audit.quarantine, "assert_v3_parent_holdout_not_quarantined", guard)
+        monkeypatch.setattr(
+            stress,
+            "load_safe_v2_fit_inputs",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("FIT loader must not run after recheck failure")),
+        )
+        monkeypatch.setattr(
+            audit,
+            "create_one_time_registry_receipt",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("receipt must not be created")),
+        )
+
+    with pytest.raises(audit.SyntheticNuisanceControlV3Error, match="parent manifest changed during model preflight"):
+        _run(tmp_path, monkeypatch, after_install=install_guard)
+    assert checks == ["quarantine", "quarantine"]
+    assert not (tmp_path / "report.json").exists()
+    assert not list((tmp_path / "registry").glob("*.json"))
+
+
 def test_v3_parent_level_contrast_requires_exact_3_by_9_coverage() -> None:
     raw = [
         {
