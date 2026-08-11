@@ -269,6 +269,88 @@ def test_manifest_path_substitution_is_rejected_before_generation_returns(
     assert manifest_path.is_file()
 
 
+def test_png_writer_rejects_path_substitution_and_completes_partial_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_root = tmp_path / "external-output"
+    output_root.mkdir()
+    target = output_root / "capsule" / "child.png"
+    original_signature = stress._path_signature
+
+    def substituted_path_signature(path: Path) -> tuple[int, int, int, int]:
+        signature = original_signature(path)
+        if path == target:
+            return signature[0], signature[1] + 1, signature[2], signature[3]
+        return signature
+
+    monkeypatch.setattr(stress, "_path_signature", substituted_path_signature)
+    with pytest.raises(stress.SyntheticAnomalyStressV2Error, match="augmentation image changed while it was written"):
+        stress._write_new_external_file(
+            target,
+            b"fixture-png-bytes",
+            output_root=output_root,
+            repository_root=stress.REPOSITORY_ROOT,
+            description="synthetic-only stress augmentation image",
+        )
+    assert target.is_file()
+
+    parent_race_target = output_root / "capsule" / "parent-race.png"
+    original_directory_identity = stress._directory_identity
+    root_identity_reads = {"count": 0}
+
+    def substituted_directory_identity(path: Path) -> tuple[int, int, int]:
+        signature = original_directory_identity(path)
+        if path == output_root:
+            root_identity_reads["count"] += 1
+            if root_identity_reads["count"] == 2:
+                return signature[0], signature[1] + 1, signature[2]
+        return signature
+
+    monkeypatch.setattr(stress, "_directory_identity", substituted_directory_identity)
+    with pytest.raises(stress.SyntheticAnomalyStressV2Error, match="parent chain changed while it was written"):
+        stress._write_new_external_file(
+            parent_race_target,
+            b"fixture-png-parent-race",
+            output_root=output_root,
+            repository_root=stress.REPOSITORY_ROOT,
+            description="synthetic-only stress augmentation image",
+        )
+    assert parent_race_target.is_file()
+
+    partial_target = output_root / "capsule" / "partial.png"
+    original_write = stress.os.write
+    writes: list[int] = []
+
+    def partial_write(fd: int, data: bytes) -> int:
+        writes.append(len(data))
+        return original_write(fd, data[: max(1, len(data) // 2)])
+
+    monkeypatch.setattr(stress, "_path_signature", original_signature)
+    monkeypatch.setattr(stress, "_directory_identity", original_directory_identity)
+    monkeypatch.setattr(stress.os, "write", partial_write)
+    stress._write_new_external_file(
+        partial_target,
+        b"fixture-png-bytes",
+        output_root=output_root,
+        repository_root=stress.REPOSITORY_ROOT,
+        description="synthetic-only stress augmentation image",
+    )
+    assert len(writes) > 1
+    assert partial_target.read_bytes() == b"fixture-png-bytes"
+
+
+def test_generator_json_serialization_and_huge_numeric_coercion_fail_closed(tmp_path: Path) -> None:
+    with pytest.raises(stress.SyntheticAnomalyStressV2Error, match="finite JSON"):
+        stress._serialize_json_document({"value": float("nan")}, description="fixture manifest")
+    with pytest.raises(stress.SyntheticAnomalyStressV2Error, match="representable finite"):
+        stress._require_finite_number(10**10000, name="fixture huge finite integer")
+    malformed_recipe = tmp_path / "malformed-recipe.json"
+    malformed_recipe.write_text('{"schemaVersion":', encoding="utf-8")
+    with pytest.raises(stress.SyntheticAnomalyStressV2Error, match="unable to read|Expecting value"):
+        stress.load_synthetic_anomaly_stress_recipe_v2(malformed_recipe)
+
+
 def test_output_preflight_rejects_existing_or_repo_local_slot_before_fit_loader(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

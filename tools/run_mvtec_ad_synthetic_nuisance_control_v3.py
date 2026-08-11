@@ -1,4 +1,4 @@
-"""Run an external V2 synthetic-stimulus response-only report."""
+"""Run the external V3 paired generic-capture nuisance-control audit."""
 
 from __future__ import annotations
 
@@ -12,15 +12,15 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 
-from phone_dino import mvtec_synthetic_stress_v2 as stress
+from phone_dino import mvtec_synthetic_nuisance_control_v3 as nuisance_control
 from phone_dino import sealed_dino_snapshot as sealed_snapshot
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Run an offline SYNTHETIC_ONLY V2 stimulus-response report. It accepts only successor FIT parents and "
-            "a validated V2 package; it does not estimate real anomaly performance."
+            "Run one offline V3 paired synthetic-stimulus vs generic-capture-control audit. "
+            "It is response-only evidence and does not estimate real anomaly performance."
         )
     )
     parser.add_argument(
@@ -39,11 +39,23 @@ def main() -> None:
     parser.add_argument("--plan", required=True, type=Path)
     parser.add_argument("--envelope", required=True, type=Path)
     parser.add_argument("--source-root", required=True, type=Path)
-    parser.add_argument("--augmentation-manifest", required=True, type=Path)
+    parser.add_argument("--stimulus-augmentation-manifest", required=True, type=Path)
+    parser.add_argument("--capture-control-augmentation-manifest", required=True, type=Path)
     parser.add_argument(
-        "--recipe",
+        "--stimulus-recipe",
         type=Path,
         default=REPOSITORY_ROOT / "tools" / "mvtec_ad_synthetic_anomaly_stress_recipe_v2.json",
+    )
+    parser.add_argument(
+        "--capture-control-recipe",
+        type=Path,
+        default=REPOSITORY_ROOT / "tools" / "mvtec_ad_successor_fit_camera_recipe_v2.json",
+    )
+    parser.add_argument(
+        "--registry-root",
+        required=True,
+        type=Path,
+        help="External persistent one-time receipt directory; never put it in the Git worktree.",
     )
     parser.add_argument("--output", required=True, type=Path)
     arguments = parser.parse_args()
@@ -52,46 +64,47 @@ def main() -> None:
         expected_manifest_sha256=arguments.expected_sealed_model_snapshot_manifest_sha256,
         repository_root=REPOSITORY_ROOT,
     )
-    # Keep every model load, feature extraction, and provenance recheck inside
-    # the activated snapshot.  The core evaluator remains unchanged; its
-    # identity-factory seam records this CLI's sealed source of truth.
+    # The complete audit (including raw and child feature extraction) stays
+    # inside the active sealed snapshot.  Its evidence identity therefore
+    # cannot silently name a mutable worktree model.
     with sealed.activate(
         expected_manifest_sha256=arguments.expected_sealed_model_snapshot_manifest_sha256,
         repository_root=REPOSITORY_ROOT,
     ) as activation:
-        report = stress.run_synthetic_stress_v2(
+        report = nuisance_control.run_synthetic_nuisance_control_v3(
             arguments.parent_holdout,
             arguments.parent_selection_contract,
             arguments.plan,
             arguments.envelope,
-            arguments.augmentation_manifest,
+            arguments.stimulus_augmentation_manifest,
+            arguments.capture_control_augmentation_manifest,
             arguments.output,
             source_root=arguments.source_root,
-            recipe_path=arguments.recipe,
+            stimulus_recipe_path=arguments.stimulus_recipe,
+            capture_control_recipe_path=arguments.capture_control_recipe,
+            registry_root=arguments.registry_root,
             model_repo=activation.snapshot.repository,
             model_weights=activation.snapshot.weights,
             device="cpu",
             identity_factory=sealed_snapshot.sealed_snapshot_identity_factory(
-                stress._feature_extractor_identity,
+                nuisance_control._feature_extractor_identity,
                 activation,
             ),
         )
-    print(json.dumps({
-        "output": str(arguments.output),
-        "syntheticStressReportSha256": report["syntheticStressReportSha256"],
-        "metricScope": report["metricScope"],
-        "realAnomalyPerformance": report["realAnomalyPerformance"],
-        "aggregate": report["aggregate"],
-        "categories": {
-            category: {
-                "thresholdFromRawCalibration": values["thresholdFromRawCalibration"],
-                "responseCounts": values["responseCounts"],
-                "responseRates": values["responseRates"],
-                "pairedScoreDeltaSummary": values["pairedScoreDeltaSummary"],
-            }
-            for category, values in report["categories"].items()
-        },
-    }, indent=2))
+    print(
+        json.dumps(
+            {
+                "output": str(arguments.output),
+                "syntheticNuisanceControlReportSha256": report["syntheticNuisanceControlReportSha256"],
+                "metricScope": report["metricScope"],
+                "evidenceClass": report["evidenceClass"],
+                "realAnomalyPerformance": report["realAnomalyPerformance"],
+                "realPrecisionRecall": report["realPrecisionRecall"],
+                "aggregate": report["aggregate"],
+            },
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

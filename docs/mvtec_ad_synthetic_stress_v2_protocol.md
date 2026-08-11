@@ -11,6 +11,23 @@ The V1 synthetic report is historical knowledge, so V2 is explicitly
 exploratory and not an independent confirmation. It must not be ranked against
 V1 or used to claim improvement.
 
+## Revision and model provenance
+
+The already-recorded V2-r1 response report has schema `2.0` and remains a
+historical engineering observation. It is not overwritten: its report did not
+serialize the later-required `realPrecisionRecall` and `evidenceClass` scope
+fields. The hardened reissue uses a newly generated package and a schema-`2.1`
+response-only report, with those fields and strict detail-to-summary
+reconciliation.
+
+Every schema-`2.1` report must carry sealed DINO snapshot provenance. The
+external snapshot manifest SHA-256 is an independently retained pin, not a
+value derived by the observation command. Its repository-content digest
+(`SEALED_REPOSITORY_CONTENT_SHA256_EXCLUDING_GIT_AND_PYTHON_BYTECODE_V1`) is
+deliberately a different algorithm from the legacy evaluator's
+`modelRepositorySha256`; both values are bound but are not required to be
+equal.
+
 ## Closed input boundary
 
 Both the generator and evaluator request only the successor V2 `FIT`
@@ -80,6 +97,19 @@ production validation, and physical qualification.
 
 ## Commands
 
+Before any DINO feature extraction, materialize a new external snapshot from
+the independently approved source pins. The materializer prints
+`snapshotManifestSha256`; record that value outside the snapshot directory as
+the approved pin for the observation command. Do not derive it from the
+directory immediately before running the observation.
+
+```powershell
+.venv\Scripts\python.exe tools\materialize_sealed_dino_snapshot.py `
+  --expected-repository-sha256 <approved-source-repository-sha256> `
+  --expected-weights-sha256 <approved-source-weights-sha256> `
+  --output <new-external-sealed-dino-snapshot>
+```
+
 First create a new external package; the output directory must not already
 exist:
 
@@ -98,6 +128,8 @@ Then write one new external response-only report:
 
 ```powershell
 .venv\Scripts\python.exe tools\run_mvtec_ad_synthetic_stress_v2.py `
+  --sealed-model-snapshot <external-sealed-dino-snapshot> `
+  --expected-sealed-model-snapshot-manifest-sha256 <approved-snapshot-manifest-sha256> `
   --parent-holdout <external-normal_holdout.json> `
   --parent-selection-contract <external-selection_protocol_v2/fresh_normal_selection_contract.json> `
   --plan <external-successor-plan.json> `
@@ -110,3 +142,13 @@ Then write one new external response-only report:
 Outputs are external and new-only. The tools reject repository-local paths,
 existing slots, links/reparse points, changed bytes, incomplete matrices, and
 any input outside the FIT-only boundary.
+
+The snapshot manifest pin is an external trust anchor: a self-consistent
+replacement snapshot with a newly calculated internal manifest digest is
+rejected. The process rejects preloaded `dinov2` modules and centralized
+Python bytecode caches; it serializes snapshot activation because Python's
+import state is process-global. Windows cannot provide a fully atomic
+no-follow traversal of mutable parent directories, so the external snapshot
+directory must be ACL-protected/read-only to other writers. A same-privilege
+actor able to race filesystem replacement remains outside this tool's
+guarantee.

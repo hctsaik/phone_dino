@@ -263,17 +263,180 @@ def _document_digest(document: dict[str, Any], field: str) -> str:
 
 
 def _fd_signature(fd: int) -> tuple[int, int, int, int]:
-    """Return the immutable identity fields for an already-open manifest."""
+    """Return immutable identity fields for an already-open output file."""
 
     status = os.fstat(fd)
     return status.st_dev, status.st_ino, status.st_mode, status.st_size
 
 
 def _path_signature(path: Path) -> tuple[int, int, int, int]:
-    """Return a no-follow identity signature for the manifested path."""
+    """Return a no-follow identity signature for an output path."""
 
     status = path.stat(follow_symlinks=False)
     return status.st_dev, status.st_ino, status.st_mode, status.st_size
+
+
+def _directory_identity(path: Path) -> tuple[int, int, int]:
+    """Return stable directory identity fields without mutable entry-size data."""
+
+    status = path.stat(follow_symlinks=False)
+    return status.st_dev, status.st_ino, status.st_mode
+
+
+def _serialize_json_document(document: dict[str, Any], *, description: str) -> bytes:
+    """Serialize a JSON artifact without permitting non-standard NaN values."""
+
+    try:
+        return (json.dumps(document, ensure_ascii=True, indent=2, sort_keys=True, allow_nan=False) + "\n").encode("utf-8")
+    except (TypeError, ValueError, OverflowError) as error:
+        raise SyntheticAnomalyStressV2Error(f"unable to serialize {description} as finite JSON") from error
+
+
+def _recheck_output_parent_chain(
+    path: Path,
+    *,
+    output_root: Path,
+    repository_root: Path,
+    description: str,
+) -> None:
+    """Revalidate the full external parent chain after a file has been synced."""
+
+    try:
+        v1._require_external_directory(
+            output_root,
+            description=f"{description} output root",
+            repository_root=repository_root,
+        )
+        v1._reject_links_on_existing_path(path.parent, description=description)
+        if not v1._is_under(output_root, path):
+            raise SyntheticAnomalyStressV2Error(f"{description} escapes its output root")
+    except v1.SyntheticAnomalyAugmentationError as error:
+        raise _raise_v1(error) from error
+
+
+def _capture_output_parent_signatures(
+    path: Path,
+    *,
+    output_root: Path,
+    description: str,
+) -> tuple[tuple[Path, tuple[int, int, int]], ...]:
+    """Bind the writable parent chain so a regular-directory swap is visible."""
+
+    signatures: list[tuple[Path, tuple[int, int, int]]] = []
+    current = path.parent
+    try:
+        while True:
+            if v1._is_link_or_reparse_point(current):
+                raise SyntheticAnomalyStressV2Error(f"{description} parent became a link or reparse point")
+            signatures.append((current, _directory_identity(current)))
+            if current == output_root:
+                return tuple(signatures)
+            parent = current.parent
+            if parent == current:
+                raise SyntheticAnomalyStressV2Error(f"{description} escapes its output root")
+            current = parent
+    except SyntheticAnomalyStressV2Error:
+        raise
+    except OSError as error:
+        raise SyntheticAnomalyStressV2Error(f"unable to bind {description} parent chain") from error
+
+
+def _verify_output_parent_signatures(
+    signatures: tuple[tuple[Path, tuple[int, int, int]], ...],
+    *,
+    path: Path,
+    output_root: Path,
+    repository_root: Path,
+    description: str,
+) -> None:
+    _recheck_output_parent_chain(
+        path,
+        output_root=output_root,
+        repository_root=repository_root,
+        description=description,
+    )
+    for parent, expected_signature in signatures:
+        if _directory_identity(parent) != expected_signature:
+            raise SyntheticAnomalyStressV2Error(f"{description} parent chain changed while it was written")
+
+
+def _write_new_external_file(
+    path: Path,
+    data: bytes,
+    *,
+    output_root: Path,
+    repository_root: Path,
+    description: str,
+) -> None:
+    """Create one external file and prove its final path still names our bytes.
+
+    Every generated PNG and the package manifest take this same hardened path:
+    exclusive no-follow creation where the platform supports it, a complete
+    descriptor write, fsync, descriptor/path identity comparison, and a full
+    parent-chain reparse inspection after bytes become durable.
+    """
+
+    if not isinstance(data, bytes) or not data:
+        raise SyntheticAnomalyStressV2Error(f"{description} must contain non-empty bytes")
+    try:
+        _recheck_output_parent_chain(
+            path,
+            output_root=output_root,
+            repository_root=repository_root,
+            description=description,
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _recheck_output_parent_chain(
+            path,
+            output_root=output_root,
+            repository_root=repository_root,
+            description=description,
+        )
+        if path.exists() or path.is_symlink():
+            raise SyntheticAnomalyStressV2Error(f"{description} already exists")
+    except OSError as error:
+        raise SyntheticAnomalyStressV2Error(f"unable to prepare {description} output") from error
+    parent_signatures = _capture_output_parent_signatures(
+        path,
+        output_root=output_root,
+        description=description,
+    )
+
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags, 0o600)
+    except FileExistsError as error:
+        raise SyntheticAnomalyStressV2Error(f"{description} already exists") from error
+    except OSError as error:
+        raise SyntheticAnomalyStressV2Error(f"unable to exclusively create {description}") from error
+    try:
+        offset = 0
+        while offset < len(data):
+            written = os.write(fd, data[offset:])
+            if written <= 0:
+                raise OSError(f"unable to write {description}")
+            offset += written
+        os.fsync(fd)
+        fd_identity = _fd_signature(fd)
+        if fd_identity[3] != len(data):
+            raise SyntheticAnomalyStressV2Error(f"{description} size is inconsistent after the full write")
+        _verify_output_parent_signatures(
+            parent_signatures,
+            path=path,
+            output_root=output_root,
+            repository_root=repository_root,
+            description=description,
+        )
+        if v1._is_link_or_reparse_point(path):
+            raise SyntheticAnomalyStressV2Error(f"{description} became a link or reparse point")
+        if _path_signature(path) != fd_identity:
+            raise SyntheticAnomalyStressV2Error(f"{description} changed while it was written")
+    except SyntheticAnomalyStressV2Error:
+        raise
+    except OSError as error:
+        raise SyntheticAnomalyStressV2Error(f"unable to verify {description}") from error
+    finally:
+        os.close(fd)
 
 
 def _write_new_external_manifest(
@@ -282,63 +445,15 @@ def _write_new_external_manifest(
     *,
     repository_root: Path,
 ) -> None:
-    """Create a manifest once and prove its final path still names our file.
+    """Write the package root of trust with the common hardened file writer."""
 
-    The output directory is already new-only, but the final manifest is the
-    package's root of trust.  Re-check its parent after image creation, create
-    it with ``O_EXCL``, fsync its bytes, then compare the open handle against
-    the no-follow path after a second reparse-point inspection.  A concurrent
-    rename, link substitution, or replacement cannot be reported as success.
-    """
-
-    try:
-        v1._require_external_directory(
-            path.parent,
-            description="synthetic-only stress augmentation output",
-            repository_root=repository_root,
-        )
-        v1._reject_links_on_existing_path(path.parent, description="synthetic-only stress manifest output")
-        if path.exists() or path.is_symlink():
-            raise SyntheticAnomalyStressV2Error("synthetic-only stress augmentation manifest already exists")
-    except v1.SyntheticAnomalyAugmentationError as error:
-        raise _raise_v1(error) from error
-
-    data = (json.dumps(document, ensure_ascii=True, indent=2, sort_keys=True) + "\n").encode("utf-8")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        fd = os.open(path, flags, 0o600)
-    except FileExistsError as error:
-        raise SyntheticAnomalyStressV2Error("synthetic-only stress augmentation manifest already exists") from error
-    except OSError as error:
-        raise SyntheticAnomalyStressV2Error("unable to exclusively create synthetic-only stress augmentation manifest") from error
-    try:
-        offset = 0
-        while offset < len(data):
-            written = os.write(fd, data[offset:])
-            if written <= 0:
-                raise OSError("unable to write synthetic-only stress augmentation manifest")
-            offset += written
-        os.fsync(fd)
-        fd_identity = _fd_signature(fd)
-        try:
-            v1._require_external_directory(
-                path.parent,
-                description="synthetic-only stress augmentation output",
-                repository_root=repository_root,
-            )
-            v1._reject_links_on_existing_path(path.parent, description="synthetic-only stress manifest output")
-        except v1.SyntheticAnomalyAugmentationError as error:
-            raise _raise_v1(error) from error
-        if v1._is_link_or_reparse_point(path):
-            raise SyntheticAnomalyStressV2Error("synthetic-only stress augmentation manifest became a link or reparse point")
-        if _path_signature(path) != fd_identity:
-            raise SyntheticAnomalyStressV2Error("synthetic-only stress augmentation manifest changed while it was written")
-    except SyntheticAnomalyStressV2Error:
-        raise
-    except OSError as error:
-        raise SyntheticAnomalyStressV2Error("unable to verify synthetic-only stress augmentation manifest") from error
-    finally:
-        os.close(fd)
+    _write_new_external_file(
+        path,
+        _serialize_json_document(document, description="synthetic-only stress augmentation manifest"),
+        output_root=path.parent,
+        repository_root=repository_root,
+        description="synthetic-only stress augmentation manifest",
+    )
 
 
 def _preflight_external_output_directory(output_dir: Path, *, repository_root: Path) -> None:
@@ -406,6 +521,8 @@ def _require_positive_int(value: object, *, name: str, maximum: int | None = Non
 def _require_finite_number(value: object, *, name: str) -> float:
     try:
         return v1._require_finite_number(value, name=name)
+    except (OverflowError, TypeError, ValueError) as error:
+        raise SyntheticAnomalyStressV2Error(f"{name} must be a representable finite number") from error
     except v1.SyntheticAnomalyAugmentationError as error:
         raise _raise_v1(error) from error
 
@@ -413,7 +530,7 @@ def _require_finite_number(value: object, *, name: str) -> float:
 def _read_recipe_json(path: Path) -> tuple[dict[str, Any], str]:
     try:
         return v1._read_recipe_json(path)
-    except v1.SyntheticAnomalyAugmentationError as error:
+    except (v1.SyntheticAnomalyAugmentationError, OverflowError, UnicodeDecodeError, ValueError, RecursionError) as error:
         raise _raise_v1(error) from error
 
 
@@ -976,16 +1093,13 @@ def generate_synthetic_anomaly_stress_v2(
                 synthetic_defect_family=family,
             )
             target_path = output_dir.joinpath(*relative_path.parts)
-            try:
-                v1._reject_links_on_existing_path(target_path.parent, description="synthetic-only stress output")
-                target_path.parent.mkdir(parents=True, exist_ok=True)
-                v1._reject_links_on_existing_path(target_path.parent, description="synthetic-only stress output")
-                with target_path.open("xb") as stream:
-                    stream.write(data)
-            except v1.SyntheticAnomalyAugmentationError as error:
-                raise _raise_v1(error) from error
-            except OSError as error:
-                raise SyntheticAnomalyStressV2Error("unable to write synthetic-only stress augmentation image") from error
+            _write_new_external_file(
+                target_path,
+                data,
+                output_root=output_dir,
+                repository_root=repository_root,
+                description="synthetic-only stress augmentation image",
+            )
             records.append({
                 "caseId": case_id,
                 "parentCaseId": parent["caseId"],
@@ -1213,7 +1327,7 @@ def load_validated_synthetic_stress_v2(
             description="synthetic-only stress augmentation manifest",
             repository_root=repository_root,
         )
-    except v1.SyntheticAnomalyAugmentationError as error:
+    except (v1.SyntheticAnomalyAugmentationError, OverflowError, UnicodeDecodeError, ValueError, RecursionError) as error:
         raise _raise_v1(error) from error
     envelope, envelope_file_sha256, parents = _load_synthetic_stress_fit_parents(
         parent_holdout_path,

@@ -806,14 +806,19 @@ score `0.261049`. Per category the synthetic-stimulus response was 32 / 36
 for capsule, 30 / 36 for metal_nut, and 35 / 36 for tile. By render level it
 was 27 / 36 subtle, 35 / 36 moderate, and 35 / 36 pronounced.
 
-The report is explicitly `SYNTHETIC_STIMULUS_RESPONSE_ONLY` with
-`realAnomalyPerformance: NOT_ESTIMATED` and `realPrecisionRecall:
-NOT_ESTIMATED`. It deliberately contains no TP/FP/FN/TN, precision, recall,
-F1, AUROC, AP, V1-versus-V2 comparison, or promotion result. It forbids model,
-algorithm, hyperparameter, threshold, or package selection; production
-validation; and physical qualification. The result only shows this frozen DINO
-configuration's response to these programmatic overlays, which are paired and
-not observed physical defects.
+The r1 report is explicitly `SYNTHETIC_STIMULUS_RESPONSE_ONLY` with
+`realAnomalyPerformance: NOT_ESTIMATED`; it deliberately contains no
+TP/FP/FN/TN, precision, recall, F1, AUROC, AP, V1-versus-V2 comparison, or
+promotion result. A later audit found that r1 did not serialize the protocol's
+additional `realPrecisionRecall: NOT_ESTIMATED` and
+`evidenceClass: SYNTHETIC_ENGINEERING_ONLY` fields. r1 is therefore retained
+only as a schema-2.0 historical engineering observation, not the current
+contract-conformant record; it will not be overwritten. The hardened r2
+reissue will add those fields and a strict JSON-only verifier. Both r1 and r2
+forbid model, algorithm, hyperparameter, threshold, or package selection;
+production validation; and physical qualification. They show only this frozen
+DINO configuration's response to paired programmatic overlays, not observed
+physical defects.
 
 ## Physical readiness audit (2026-08-09)
 
