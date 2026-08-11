@@ -1,0 +1,47 @@
+{
+  "authoritative": false,
+  "defectProfiles": {
+    "LOCAL_OCCLUSION": {
+      "centerMarginFraction": 0.22,
+      "maxCornerRadiusFraction": 0.06,
+      "maxHeightFraction": 0.2,
+      "maxOpacity": 0.92,
+      "maxWidthFraction": 0.24,
+      "minCornerRadiusFraction": 0.02,
+      "minHeightFraction": 0.1,
+      "minOpacity": 0.74,
+      "minWidthFraction": 0.12
+    },
+    "LOCAL_SCRATCH": {
+      "centerMarginFraction": 0.22,
+      "maxLengthFraction": 0.34,
+      "maxOpacity": 0.94,
+      "maxWidthFraction": 0.024,
+      "minLengthFraction": 0.16,
+      "minOpacity": 0.7,
+      "minWidthFraction": 0.009
+    },
+    "LOCAL_SPOT": {
+      "centerMarginFraction": 0.22,
+      "maxOpacity": 0.8,
+      "maxRadiusFraction": 0.15,
+      "maxSoftnessFraction": 0.035,
+      "minOpacity": 0.52,
+      "minRadiusFraction": 0.065,
+      "minSoftnessFraction": 0.008
+    }
+  },
+  "description": "Closed synthetic-only offline MVTec augmentation recipe. It renders deterministic local scratch, spot, and occlusion patterns on FIT nominal parents solely to exercise an engineering test harness. The patterns are not observed defects, do not model physical failure mechanisms, have no real-anomaly ground truth, and must not be used for qualification, threshold selection, release decisions, or production authorization.",
+  "id": "SYNTHETIC_ONLY_LOCAL_DEFECTS_V1_PNG",
+  "outputEncoding": {
+    "compressLevel": 9,
+    "format": "PNG",
+    "mode": "RGB",
+    "optimize": false
+  },
+  "productionAuthorized": false,
+  "purpose": "OFFLINE_MVTEC_SYNTHETIC_ONLY_AUGMENTATION_AND_TESTING",
+  "samplingAlgorithm": "NAMED_SHA256_SYNTHETIC_DEFECT_SUBSTREAMS_V1",
+  "schemaVersion": "phone-dino.mvtec-ad-synthetic-only-recipe/1.0",
+  "syntheticOnly": true
+}
