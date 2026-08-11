@@ -858,8 +858,29 @@ external cohort root. Its output cannot establish the exact set of files it
 read, so the strict untouched-image boundary for that cohort can no longer be
 asserted. No V3 receipt, report, or selection artifact was created, and this
 cohort will not be used to claim an independent V3 control result. A future
-strict V3 observation requires a newly controlled source cohort; the protocol
-now explicitly forbids recursive cohort discovery or hashing during preflight.
+strict paired-nuisance observation requires a newly controlled source cohort
+under a separately designed V4 protocol; the protocol now explicitly forbids
+recursive cohort discovery or hashing during preflight.
+
+The exposed cohort is now durably quarantined. The external JSON-only ledger
+record `incident_ledger\fresh_normal_holdout_v1_quarantine.json`, deliberately
+stored outside the quarantined cohort root, has file digest
+`sha256:f8797a33eca14339cefa05c3c0aa94827617e2d717e1c21ee8287479baf7781d`
+and declared incident digest
+`sha256:be690e112ae28f04a69db572a7b9931d862fcac1da9653e92a99ad5995fbf2d4`.
+It binds the exact normal-holdout file digest
+`sha256:0034e045001787a6ce35042701cb470a97c03ff72117311ff7525fd5d9106b18`
+and declared digest
+`sha256:51a359f5d579a99321dc33687fecc6d9a8db92fb7f921960bbb6898c23e2e74e`.
+The V3 direct API and CLI now require this externally retained incident path
+and an independently supplied incident pin before they can prepare an output
+slot, create a receipt, load the model, or call the FIT reader. The known
+cohort identity is also compiled into the guard, so a missing, replaced, or
+self-consistent forged incident record fails closed rather than re-enabling
+the cohort. No release or override path exists for this V3 use. V3 remains
+hard-bound to this old successor evidence chain; a controlled recovery must
+use a separately designed and preregistered V4 protocol, not a new cohort
+through V3.
 
 ## Physical readiness audit (2026-08-09)
 

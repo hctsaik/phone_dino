@@ -276,6 +276,14 @@ def _install_run_fixtures(
         return stimulus_manifest, stimulus_metadata["fileSha256"], [dict(item) for item in stimuli]
 
     monkeypatch.setattr(stress, "load_safe_v2_fit_inputs", safe_loader)
+    # The normal happy-path fixture intentionally uses lightweight synthetic
+    # paths rather than a 477-record closed holdout JSON.  Dedicated guard
+    # tests below exercise the real fail-closed boundary.
+    monkeypatch.setattr(
+        audit.quarantine,
+        "assert_v3_parent_holdout_not_quarantined",
+        lambda *_args, **_kwargs: (_digest("fixture-holdout-file"), _digest("fixture-holdout-declared")),
+    )
     monkeypatch.setattr(stress, "calibrate_raw_thresholds", calibrate)
     monkeypatch.setattr(audit, "_preflight_stimulus_package", stimulus_preflight)
     monkeypatch.setattr(audit, "_preflight_camera_package", capture_preflight)
@@ -317,6 +325,8 @@ def _run(
         stimulus_recipe_path=tmp_path / "stimulus-recipe.json",
         capture_control_recipe_path=tmp_path / "camera-recipe.json",
         registry_root=registry,
+        quarantine_incident_path=tmp_path / "external" / "incident.json",
+        expected_quarantine_incident_sha256=audit.quarantine.KNOWN_FRESH_NORMAL_HOLDOUT_V1_INCIDENT_DECLARED_SHA256,
         model_repo=tmp_path / "model",
         model_weights=tmp_path / "weights.pth",
         embedder_factory=_FakeEmbedder,
@@ -424,6 +434,47 @@ def test_v3_direct_api_rejects_unsealed_feature_identity_before_receipt(
         _run(tmp_path, monkeypatch, events=events, identity_factory=unsealed_identity)
     assert events == []
     assert not list((tmp_path / "registry").glob("*.json"))
+
+
+def test_v3_quarantine_rejection_precedes_fit_loader_receipt_and_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[str] = []
+
+    def reject_guard(*_args: object, **_kwargs: object) -> tuple[str, str]:
+        events.append("quarantine")
+        raise audit.quarantine.CohortQuarantineError("fixture exposed cohort")
+
+    def install_guard(registry: Path) -> None:
+        monkeypatch.setattr(audit.quarantine, "assert_v3_parent_holdout_not_quarantined", reject_guard)
+        monkeypatch.setattr(
+            stress,
+            "load_safe_v2_fit_inputs",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("FIT loader must not run")),
+        )
+        monkeypatch.setattr(
+            audit,
+            "create_one_time_registry_receipt",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("receipt must not be created")),
+        )
+        monkeypatch.setattr(
+            audit.knn,
+            "_require_external_output",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("output slot must not be prepared")),
+        )
+        assert not registry.exists()
+
+    with pytest.raises(audit.SyntheticNuisanceControlV3Error, match="cohort quarantine guard rejected"):
+        _run(
+            tmp_path,
+            monkeypatch,
+            events=events,
+            after_install=install_guard,
+            identity_factory=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("model identity must not be read")),
+        )
+    assert events == ["quarantine"]
+    assert not (tmp_path / "report.json").exists()
+    assert not (tmp_path / "registry").exists()
 
 
 def test_v3_parent_level_contrast_requires_exact_3_by_9_coverage() -> None:
@@ -670,6 +721,8 @@ def test_existing_receipt_blocks_child_loaders(tmp_path: Path, monkeypatch: pyte
             stimulus_recipe_path=tmp_path / "stimulus-recipe.json",
             capture_control_recipe_path=tmp_path / "camera-recipe.json",
             registry_root=tmp_path / "registry",
+            quarantine_incident_path=tmp_path / "external" / "incident.json",
+            expected_quarantine_incident_sha256=audit.quarantine.KNOWN_FRESH_NORMAL_HOLDOUT_V1_INCIDENT_DECLARED_SHA256,
             model_repo=tmp_path / "model",
             model_weights=tmp_path / "weights.pth",
             embedder_factory=_FakeEmbedder,
@@ -708,6 +761,8 @@ def test_package_tamper_after_receipt_is_rejected(tmp_path: Path, monkeypatch: p
             stimulus_recipe_path=tmp_path / "stimulus-recipe.json",
             capture_control_recipe_path=tmp_path / "camera-recipe.json",
             registry_root=tmp_path / "registry",
+            quarantine_incident_path=tmp_path / "external" / "incident.json",
+            expected_quarantine_incident_sha256=audit.quarantine.KNOWN_FRESH_NORMAL_HOLDOUT_V1_INCIDENT_DECLARED_SHA256,
             model_repo=tmp_path / "model",
             model_weights=tmp_path / "weights.pth",
             embedder_factory=_FakeEmbedder,
@@ -783,6 +838,11 @@ def test_malformed_v2_metadata_rejects_before_receipt_and_child_access(
         lambda *_args, **_kwargs: child_calls.append("stimulus")
         or (_ for _ in ()).throw(AssertionError("stimulus child must not be opened")),
     )
+    monkeypatch.setattr(
+        audit.quarantine,
+        "assert_v3_parent_holdout_not_quarantined",
+        lambda *_args, **_kwargs: (_digest("fixture-holdout-file"), _digest("fixture-holdout-declared")),
+    )
     registry = tmp_path / "registry"
     with pytest.raises(audit.SyntheticNuisanceControlV3Error, match="child parent binding"):
         audit.run_synthetic_nuisance_control_v3(
@@ -797,6 +857,8 @@ def test_malformed_v2_metadata_rejects_before_receipt_and_child_access(
             stimulus_recipe_path=recipe_path,
             capture_control_recipe_path=tmp_path / "camera-recipe.json",
             registry_root=registry,
+            quarantine_incident_path=tmp_path / "external" / "incident.json",
+            expected_quarantine_incident_sha256=audit.quarantine.KNOWN_FRESH_NORMAL_HOLDOUT_V1_INCIDENT_DECLARED_SHA256,
             model_repo=tmp_path / "model",
             model_weights=tmp_path / "weights.pth",
             embedder_factory=_FakeEmbedder,
@@ -927,6 +989,8 @@ def test_stimulus_metadata_rejects_bad_schema_digest_and_repo_path(
 def test_no_v1_report_api_or_classification_metric_fields() -> None:
     signature = inspect.signature(audit.run_synthetic_nuisance_control_v3)
     assert "report" not in " ".join(signature.parameters).lower()
+    assert "quarantine_incident_path" in signature.parameters
+    assert "expected_quarantine_incident_sha256" in signature.parameters
     source = inspect.getsource(audit)
     assert "mvtec_synthetic_anomaly_test" not in source
     assert "synthetic_confusion_metrics" not in source

@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from phone_dino import mvtec_normal_successor as successor
+from phone_dino import mvtec_cohort_quarantine as quarantine
 from phone_dino import mvtec_successor_evaluator_v2 as knn
 from phone_dino import mvtec_successor_fit_augmentation_v2 as camera
 from phone_dino import mvtec_synthetic_anomaly_stress_v2 as stimulus
@@ -1581,6 +1582,8 @@ def run_synthetic_nuisance_control_v3(
     stimulus_recipe_path: Path,
     capture_control_recipe_path: Path,
     registry_root: Path,
+    quarantine_incident_path: Path,
+    expected_quarantine_incident_sha256: str,
     model_repo: Path,
     model_weights: Path,
     device: str = "cpu",
@@ -1597,6 +1600,18 @@ def run_synthetic_nuisance_control_v3(
 
     if device != "cpu":
         raise SyntheticNuisanceControlV3Error("V3 nuisance-control audit supports CPU only")
+    # This JSON-only gate intentionally precedes output/receipt preparation,
+    # model work, and the FIT-only loader.  A rejected cohort therefore cannot
+    # consume a one-time slot or open a FIT/query/child image byte.
+    try:
+        quarantine.assert_v3_parent_holdout_not_quarantined(
+            parent_holdout_path,
+            quarantine_incident_path=quarantine_incident_path,
+            expected_quarantine_incident_sha256=expected_quarantine_incident_sha256,
+            repository_root=repository_root,
+        )
+    except quarantine.CohortQuarantineError as error:
+        raise SyntheticNuisanceControlV3Error(f"V3 cohort quarantine guard rejected the parent holdout: {error}") from error
     # This deliberately includes output-slot and registry-root preparation.
     # Report serialization/write is excluded and named explicitly below.
     started = time.process_time()
@@ -1634,6 +1649,20 @@ def run_synthetic_nuisance_control_v3(
     if loaded_identity != extractor_identity:
         raise SyntheticNuisanceControlV3Error("feature extractor changed while DINO loaded")
     timings["modelPreflightSeconds"] += time.process_time() - model_started
+
+    # Re-read the JSON-only quarantine binding immediately before handing the
+    # parent path to the phase-safe FIT loader.  This narrows the otherwise
+    # long model-preflight window in which a same-privilege path replacement
+    # could change which cohort the loader is asked to open.
+    try:
+        quarantine.assert_v3_parent_holdout_not_quarantined(
+            parent_holdout_path,
+            quarantine_incident_path=quarantine_incident_path,
+            expected_quarantine_incident_sha256=expected_quarantine_incident_sha256,
+            repository_root=repository_root,
+        )
+    except quarantine.CohortQuarantineError as error:
+        raise SyntheticNuisanceControlV3Error(f"V3 cohort quarantine guard rejected the parent holdout: {error}") from error
 
     raw_started = time.process_time()
     try:

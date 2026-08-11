@@ -13,6 +13,7 @@ if str(REPOSITORY_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 
 from phone_dino import mvtec_synthetic_nuisance_control_v3 as nuisance_control
+from phone_dino import mvtec_cohort_quarantine as quarantine
 from phone_dino import sealed_dino_snapshot as sealed_snapshot
 
 
@@ -35,6 +36,20 @@ def main() -> None:
         help="Independently approved SHA-256 pin for the sealed snapshot manifest.",
     )
     parser.add_argument("--parent-holdout", required=True, type=Path)
+    parser.add_argument(
+        "--cohort-quarantine-incident",
+        required=True,
+        type=Path,
+        help=(
+            "External immutable JSON-only incident record for the permanently quarantined "
+            "fresh_normal_holdout_v1 cohort."
+        ),
+    )
+    parser.add_argument(
+        "--expected-cohort-quarantine-incident-sha256",
+        required=True,
+        help="Independently retained SHA-256 pin for the immutable cohort-quarantine incident.",
+    )
     parser.add_argument("--parent-selection-contract", required=True, type=Path)
     parser.add_argument("--plan", required=True, type=Path)
     parser.add_argument("--envelope", required=True, type=Path)
@@ -59,6 +74,14 @@ def main() -> None:
     )
     parser.add_argument("--output", required=True, type=Path)
     arguments = parser.parse_args()
+    # Fail before snapshot activation as well as inside the direct API.  The
+    # duplicate API-level gate closes callers that do not use this CLI.
+    quarantine.assert_v3_parent_holdout_not_quarantined(
+        arguments.parent_holdout,
+        quarantine_incident_path=arguments.cohort_quarantine_incident,
+        expected_quarantine_incident_sha256=arguments.expected_cohort_quarantine_incident_sha256,
+        repository_root=REPOSITORY_ROOT,
+    )
     sealed = sealed_snapshot.load_sealed_dino_snapshot(
         arguments.sealed_model_snapshot,
         expected_manifest_sha256=arguments.expected_sealed_model_snapshot_manifest_sha256,
@@ -83,6 +106,8 @@ def main() -> None:
             stimulus_recipe_path=arguments.stimulus_recipe,
             capture_control_recipe_path=arguments.capture_control_recipe,
             registry_root=arguments.registry_root,
+            quarantine_incident_path=arguments.cohort_quarantine_incident,
+            expected_quarantine_incident_sha256=arguments.expected_cohort_quarantine_incident_sha256,
             model_repo=activation.snapshot.repository,
             model_weights=activation.snapshot.weights,
             device="cpu",

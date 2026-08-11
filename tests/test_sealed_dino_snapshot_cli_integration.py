@@ -227,6 +227,20 @@ def test_v3_cli_uses_required_sealed_snapshot_for_full_run_and_provenance_wrappe
         events.append("identity-wrapper")
         return identity_factory_marker
 
+    def quarantine_guard(
+        parent_holdout: Path,
+        *,
+        quarantine_incident_path: Path,
+        expected_quarantine_incident_sha256: str,
+        repository_root: Path,
+    ) -> tuple[str, str]:
+        assert parent_holdout == tmp_path / "chain" / "holdout.json"
+        assert quarantine_incident_path == tmp_path / "external" / "cohort-quarantine-incident.json"
+        assert expected_quarantine_incident_sha256 == "sha256:" + "c" * 64
+        assert repository_root == REPOSITORY_ROOT
+        events.append("quarantine")
+        return "sha256:" + "1" * 64, "sha256:" + "2" * 64
+
     def run(*args: object, **kwargs: object) -> dict[str, object]:
         assert sealed.activation is not None and sealed.activation.entered
         events.append("run")
@@ -243,6 +257,7 @@ def test_v3_cli_uses_required_sealed_snapshot_for_full_run_and_provenance_wrappe
 
     monkeypatch.setattr(tool.sealed_snapshot, "load_sealed_dino_snapshot", load)
     monkeypatch.setattr(tool.sealed_snapshot, "sealed_snapshot_identity_factory", identity_wrapper)
+    monkeypatch.setattr(tool.quarantine, "assert_v3_parent_holdout_not_quarantined", quarantine_guard)
     monkeypatch.setattr(tool.nuisance_control, "run_synthetic_nuisance_control_v3", run)
     monkeypatch.setattr(
         sys,
@@ -252,6 +267,8 @@ def test_v3_cli_uses_required_sealed_snapshot_for_full_run_and_provenance_wrappe
             "--sealed-model-snapshot", str(tmp_path / "external" / "snapshot"),
             "--expected-sealed-model-snapshot-manifest-sha256", "sha256:" + "f" * 64,
             "--parent-holdout", str(tmp_path / "chain" / "holdout.json"),
+            "--cohort-quarantine-incident", str(tmp_path / "external" / "cohort-quarantine-incident.json"),
+            "--expected-cohort-quarantine-incident-sha256", "sha256:" + "c" * 64,
             "--parent-selection-contract", str(tmp_path / "chain" / "contract.json"),
             "--plan", str(tmp_path / "chain" / "plan.json"),
             "--envelope", str(tmp_path / "chain" / "envelope.json"),
@@ -265,12 +282,14 @@ def test_v3_cli_uses_required_sealed_snapshot_for_full_run_and_provenance_wrappe
 
     tool.main()
 
-    assert events == ["load", "activate", "activation-enter", "identity-wrapper", "run", "activation-exit"]
+    assert events == ["quarantine", "load", "activate", "activation-enter", "identity-wrapper", "run", "activation-exit"]
     assert captured["kwargs"] == {
         "source_root": tmp_path / "source",
         "stimulus_recipe_path": REPOSITORY_ROOT / "tools" / "mvtec_ad_synthetic_anomaly_stress_recipe_v2.json",
         "capture_control_recipe_path": REPOSITORY_ROOT / "tools" / "mvtec_ad_successor_fit_camera_recipe_v2.json",
         "registry_root": tmp_path / "external" / "registry",
+        "quarantine_incident_path": tmp_path / "external" / "cohort-quarantine-incident.json",
+        "expected_quarantine_incident_sha256": "sha256:" + "c" * 64,
         "model_repo": sealed.repository,
         "model_weights": sealed.weights,
         "device": "cpu",
