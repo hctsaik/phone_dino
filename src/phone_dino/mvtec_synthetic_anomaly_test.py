@@ -273,6 +273,7 @@ def _execution_metadata(timings: dict[str, float], *, repository_root: Path) -> 
     return {
         "syntheticTestModuleSha256": sha256_file(Path(__file__)),
         "entrypointSha256": sha256_file(repository_root / "tools" / "run_mvtec_ad_synthetic_anomaly_test.py"),
+        "timingBasis": "PROCESS_CPU_TIME_EXCLUDES_SUSPEND",
         "phaseTimingsSeconds": {name: round(value, 6) for name, value in timings.items()},
         "python": sys.version,
         "platform": platform.platform(),
@@ -425,15 +426,21 @@ def _adapt_synthetic_query_records(
 def _extract_features(
     records: list[dict[str, Any]], *, embedder: Any, timings: dict[str, float]
 ) -> dict[str, object]:
+    started = time.process_time()
     try:
-        return knn._extract_patch_features(
+        # The frozen helper reports wall-clock sub-timings.  Keep those out of
+        # this report so the stated process-CPU timing basis remains true even
+        # if a workstation is suspended mid-run.
+        result = knn._extract_patch_features(
             records,
             embedder=embedder,
             batch_size=SYNTHETIC_ANOMALY_TEST_V1_BATCH_SIZE,
-            timings=timings,
+            timings={"inputVerificationSeconds": 0.0, "featureInferenceSeconds": 0.0},
         )
     except knn.SuccessorV2EvaluatorError as error:
         raise SyntheticAnomalyTestError(str(error)) from error
+    timings["featureProcessingSeconds"] += time.process_time() - started
+    return result
 
 
 def _prototype_bank(records: list[dict[str, Any]], features: dict[str, object], *, category: str) -> object:
@@ -604,16 +611,18 @@ def run_synthetic_anomaly_test(
         prepared_output = knn._require_external_output(output_path, repository_root=repository_root)
     except knn.SuccessorV2EvaluatorError as error:
         raise SyntheticAnomalyTestError(str(error)) from error
-    started = time.perf_counter()
+    # This test may run on a workstation which is suspended between tool
+    # invocations.  Process CPU time keeps the audit timings meaningful and
+    # avoids reporting suspend time as image processing time.
+    started = time.process_time()
     timings = {
         "inputAssemblySeconds": 0.0,
         "provenanceSeconds": 0.0,
-        "inputVerificationSeconds": 0.0,
-        "featureInferenceSeconds": 0.0,
+        "featureProcessingSeconds": 0.0,
         "scoringSeconds": 0.0,
         "totalElapsedSeconds": 0.0,
     }
-    input_started = time.perf_counter()
+    input_started = time.process_time()
     try:
         envelope, envelope_file_sha256, raw_parents = successor.load_successor_safe_normal_inputs(
             parent_holdout_path,
@@ -639,16 +648,16 @@ def run_synthetic_anomaly_test(
         repository_root=repository_root,
     )
     synthetic_queries = _adapt_synthetic_query_records(augmented_records, query_parents=split["SYNTHETIC_QUERY"])
-    timings["inputAssemblySeconds"] += time.perf_counter() - input_started
+    timings["inputAssemblySeconds"] += time.process_time() - input_started
 
-    provenance_started = time.perf_counter()
+    provenance_started = time.process_time()
     extractor_identity = identity_factory(model_repo=model_repo, model_weights=model_weights, device=device)
     extractor_identity_sha256 = successor.canonical_json_sha256(extractor_identity)
-    timings["provenanceSeconds"] += time.perf_counter() - provenance_started
+    timings["provenanceSeconds"] += time.process_time() - provenance_started
     embedder = embedder_factory(model_repo=model_repo, model_weights=model_weights, device=device)
-    provenance_started = time.perf_counter()
+    provenance_started = time.process_time()
     loaded_identity = identity_factory(model_repo=model_repo, model_weights=model_weights, device=device)
-    timings["provenanceSeconds"] += time.perf_counter() - provenance_started
+    timings["provenanceSeconds"] += time.process_time() - provenance_started
     if loaded_identity != extractor_identity:
         raise SyntheticAnomalyTestError("feature extractor changed while DINO loaded")
 
@@ -664,7 +673,7 @@ def run_synthetic_anomaly_test(
         category: _prototype_bank(prototype_records, raw_features, category=category)
         for category in SYNTHETIC_ANOMALY_TEST_V1_CATEGORIES
     }
-    scoring_started = time.perf_counter()
+    scoring_started = time.process_time()
     raw_calibration_components = _score_records(calibration_records, raw_features, prototype_banks=prototype_banks)
     thresholds = _thresholds_from_calibration(raw_calibration_components)
     raw_query_components = _score_records(query_nominal_records, raw_features, prototype_banks=prototype_banks)
@@ -687,7 +696,7 @@ def run_synthetic_anomaly_test(
     ]
     synthetic_features = _extract_features(synthetic_feature_records, embedder=embedder, timings=timings)
     synthetic_components = _score_records(synthetic_feature_records, synthetic_features, prototype_banks=prototype_banks)
-    timings["scoringSeconds"] += time.perf_counter() - scoring_started
+    timings["scoringSeconds"] += time.process_time() - scoring_started
 
     calibration_scores = [
         {
@@ -746,12 +755,12 @@ def run_synthetic_anomaly_test(
     ]
     aggregate = synthetic_confusion_metrics(aggregate_rows, threshold=0.5)
 
-    provenance_started = time.perf_counter()
+    provenance_started = time.process_time()
     completed_identity = identity_factory(model_repo=model_repo, model_weights=model_weights, device=device)
-    timings["provenanceSeconds"] += time.perf_counter() - provenance_started
+    timings["provenanceSeconds"] += time.process_time() - provenance_started
     if completed_identity != extractor_identity:
         raise SyntheticAnomalyTestError("feature extractor changed while synthetic-only test ran")
-    timings["totalElapsedSeconds"] = time.perf_counter() - started
+    timings["totalElapsedSeconds"] = time.process_time() - started
     parent_evidence = envelope.get("parentEvidence")
     if not isinstance(parent_evidence, dict) or not isinstance(envelope.get("successorPartitionIdentities"), dict):
         raise SyntheticAnomalyTestError("successor envelope is missing its closed parent evidence")
