@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import json
 import sys
 import threading
@@ -33,6 +34,31 @@ def _source_layout(tmp_path: Path) -> tuple[Path, Path, Path]:
     return worktree, repository, weights
 
 
+def _namespace_hub_source_layout(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """Create the PEP 420 layout imported by the real Cell-DINO hubconf."""
+
+    worktree, repository, weights = _source_layout(tmp_path)
+    (repository / "dinov2" / "hub" / "cell_dino").mkdir(parents=True)
+    (repository / "dinov2" / "hub" / "xray_dino").mkdir(parents=True)
+    (repository / "dinov2" / "hub" / "__init__.py").write_text("\n", encoding="utf-8")
+    (repository / "dinov2" / "hub" / "cell_dino" / "backbones.py").write_text(
+        "CELL_MARKER = 'cell-dino'\n",
+        encoding="utf-8",
+    )
+    (repository / "dinov2" / "hub" / "xray_dino" / "backbones.py").write_text(
+        "XRAY_MARKER = 'xray-dino'\n",
+        encoding="utf-8",
+    )
+    (repository / "hubconf.py").write_text(
+        "from dinov2.hub.cell_dino.backbones import CELL_MARKER\n"
+        "from dinov2.hub.xray_dino.backbones import XRAY_MARKER\n\n"
+        "def dinov2_vits14(*, pretrained=False):\n"
+        "    return CELL_MARKER, XRAY_MARKER, pretrained\n",
+        encoding="utf-8",
+    )
+    return worktree, repository, weights
+
+
 def _worktree_source_layout(tmp_path: Path) -> tuple[Path, Path, Path]:
     """Create the real-style ``runtime/models`` layout inside a worktree."""
 
@@ -62,6 +88,19 @@ def _materialize(tmp_path: Path, *, destination_name: str = "snapshot") -> tuple
         repository_root=worktree,
     )
     return result, worktree, repository, weights
+
+
+def _materialize_namespace_hub(tmp_path: Path) -> tuple[snapshot.SealedDinoSnapshot, Path]:
+    worktree, repository, weights = _namespace_hub_source_layout(tmp_path)
+    sealed = snapshot.materialize_sealed_dino_snapshot(
+        repository,
+        weights,
+        tmp_path / "namespace-hub-snapshot",
+        expected_repository_sha256=snapshot.sealed_repository_sha256(repository),
+        expected_weights_sha256=snapshot.sha256_file(weights),
+        repository_root=worktree,
+    )
+    return sealed, worktree
 
 
 def test_materializes_new_cache_free_snapshot_with_self_authenticating_manifest(tmp_path: Path) -> None:
@@ -192,6 +231,8 @@ def test_identity_factory_binds_active_snapshot_and_rejects_model_path_substitut
             "repositoryDigestAlgorithm": snapshot.SEALED_DINO_REPOSITORY_DIGEST_ALGORITHM,
             "snapshotWeightsSha256": sealed.weights_sha256,
             "weightsDigestAlgorithm": snapshot.SEALED_DINO_WEIGHTS_DIGEST_ALGORITHM,
+            "snapshotGuardModuleSha256": snapshot.sha256_file(Path(snapshot.__file__)),
+            "snapshotGuardModuleDigestAlgorithm": snapshot.SEALED_DINO_SNAPSHOT_GUARD_MODULE_DIGEST_ALGORITHM,
         }
         with pytest.raises(snapshot.SealedDinoSnapshotError, match="must use the active sealed snapshot"):
             identity_factory(
@@ -589,6 +630,31 @@ class _FakeTorch:
         self.hub = _FakeHub()
 
 
+class _DirectLocalHub:
+    """Small ``torch.hub._load_local`` analogue for the PEP 420 regression."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def load(self, *args: object, **kwargs: object) -> object:
+        self.calls.append((args, kwargs))
+        repository_text, entrypoint = args
+        assert isinstance(repository_text, str)
+        assert entrypoint == "dinov2_vits14"
+        assert kwargs == {"source": "local", "pretrained": False}
+        hubconf_path = Path(repository_text) / "hubconf.py"
+        spec = importlib.util.spec_from_file_location("hubconf", hubconf_path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return getattr(module, entrypoint)(pretrained=False)
+
+
+class _DirectLocalTorch:
+    def __init__(self) -> None:
+        self.hub = _DirectLocalHub()
+
+
 def test_activation_sets_no_bytecode_and_torch_hub_receives_snapshot_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -616,6 +682,100 @@ def test_activation_sets_no_bytecode_and_torch_hub_receives_snapshot_path(
     assert fake_torch.hub.calls == [
         ((str(sealed.repository), "dinov2_vits14"), {"source": "local", "pretrained": False})
     ]
+
+
+def test_direct_local_torch_hub_pep420_namespaces_are_verified_and_removed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The evaluator's direct ``torch.hub.load`` path must not need our wrapper."""
+
+    sealed, worktree = _materialize_namespace_hub(tmp_path)
+    for name in tuple(sys.modules):
+        if name == "dinov2" or name.startswith("dinov2."):
+            monkeypatch.delitem(sys.modules, name, raising=False)
+    fake_torch = _DirectLocalTorch()
+
+    with sealed.activate(expected_manifest_sha256=sealed.manifest_sha256, repository_root=worktree) as activation:
+        assert fake_torch.hub.load(
+            str(sealed.repository),
+            "dinov2_vits14",
+            source="local",
+            pretrained=False,
+        ) == ("cell-dino", "xray-dino", False)
+        # This matches the real evaluator: it uses torch.hub directly, then
+        # the provenance wrapper rechecks activation integrity.
+        activation.verify_integrity()
+        cell_namespace = sys.modules["dinov2.hub.cell_dino"]
+        assert getattr(cell_namespace, "__cached__", None) is None
+        cell_namespace.__cached__ = "unexpected-bytecode.pyc"
+        with pytest.raises(snapshot.SealedDinoSnapshotError, match="unsafe namespace specification"):
+            activation.verify_integrity()
+        cell_namespace.__cached__ = None
+        identity = snapshot.sealed_snapshot_identity_factory(
+            lambda **_kwargs: {"base": "fixture"},
+            activation,
+        )(
+            model_repo=sealed.repository,
+            model_weights=sealed.weights,
+            device="cpu",
+        )
+        assert identity["sealedDinoSnapshot"]["snapshotGuardModuleSha256"] == activation.snapshot_guard_module_sha256
+        assert {"dinov2.hub.cell_dino", "dinov2.hub.xray_dino"}.issubset(sys.modules)
+
+    assert not any(name == "dinov2" or name.startswith("dinov2.") for name in sys.modules)
+    assert fake_torch.hub.calls == [
+        ((str(sealed.repository), "dinov2_vits14"), {"source": "local", "pretrained": False})
+    ]
+
+
+def test_activation_rejects_unapproved_dynamic_namespace_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sealed, worktree, _repository, _weights = _materialize(tmp_path)
+    for name in tuple(sys.modules):
+        if name == "dinov2" or name.startswith("dinov2."):
+            monkeypatch.delitem(sys.modules, name, raising=False)
+
+    with sealed.activate(expected_manifest_sha256=sealed.manifest_sha256, repository_root=worktree) as activation:
+        unexpected = types.ModuleType("dinov2.unapproved_namespace")
+        monkeypatch.setitem(sys.modules, "dinov2.unapproved_namespace", unexpected)
+        with pytest.raises(snapshot.SealedDinoSnapshotError, match="has no verifiable source origin"):
+            activation.verify_integrity()
+        monkeypatch.delitem(sys.modules, "dinov2.unapproved_namespace", raising=False)
+
+
+def test_activation_rechecks_its_guard_source_digest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sealed, worktree, _repository, _weights = _materialize(tmp_path)
+    for name in tuple(sys.modules):
+        if name == "dinov2" or name.startswith("dinov2."):
+            monkeypatch.delitem(sys.modules, name, raising=False)
+
+    with sealed.activate(expected_manifest_sha256=sealed.manifest_sha256, repository_root=worktree) as activation:
+        with monkeypatch.context() as phase:
+            phase.setattr(snapshot, "_snapshot_guard_module_sha256", lambda: "sha256:" + "0" * 64)
+            with pytest.raises(snapshot.SealedDinoSnapshotError, match="guard module changed during activation"):
+                activation.verify_integrity()
+
+
+def test_activation_exit_preserves_body_and_cleanup_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sealed, worktree, _repository, _weights = _materialize(tmp_path)
+    for name in tuple(sys.modules):
+        if name == "dinov2" or name.startswith("dinov2."):
+            monkeypatch.delitem(sys.modules, name, raising=False)
+
+    with pytest.raises(BaseExceptionGroup) as raised:
+        with sealed.activate(expected_manifest_sha256=sealed.manifest_sha256, repository_root=worktree) as activation:
+            monkeypatch.setattr(
+                activation,
+                "verify_integrity",
+                lambda: (_ for _ in ()).throw(snapshot.SealedDinoSnapshotError("cleanup failed")),
+            )
+            raise RuntimeError("observation body failed")
+
+    assert any(isinstance(error, RuntimeError) and str(error) == "observation body failed" for error in raised.value.exceptions)
+    assert any(
+        isinstance(error, snapshot.SealedDinoSnapshotError) and str(error) == "cleanup failed"
+        for error in raised.value.exceptions
+    )
 
 
 def test_full_loader_uses_sealed_paths_and_rechecks_after_weight_load(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

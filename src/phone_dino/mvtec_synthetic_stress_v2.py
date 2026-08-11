@@ -261,6 +261,8 @@ SEALED_DINO_SNAPSHOT_PROVENANCE_FIELDS = {
     "snapshotManifestSha256",
     "snapshotRepositorySha256",
     "snapshotWeightsSha256",
+    "snapshotGuardModuleSha256",
+    "snapshotGuardModuleDigestAlgorithm",
 }
 MAX_SAFE_JSON_INTEGER = (1 << 53) - 1
 MAX_REPORT_JSON_BYTES = 16 * 1024 * 1024
@@ -766,10 +768,18 @@ def _validate_feature_extractor(value: object) -> dict[str, Any]:
             raise SyntheticStressV2Error("synthetic-stimulus response report sealed DINO repository digest algorithm is unsupported")
         if provenance["weightsDigestAlgorithm"] != sealed_snapshot.SEALED_DINO_WEIGHTS_DIGEST_ALGORITHM:
             raise SyntheticStressV2Error("synthetic-stimulus response report sealed DINO weights digest algorithm is unsupported")
+        if (
+            provenance["snapshotGuardModuleDigestAlgorithm"]
+            != sealed_snapshot.SEALED_DINO_SNAPSHOT_GUARD_MODULE_DIGEST_ALGORITHM
+        ):
+            raise SyntheticStressV2Error(
+                "synthetic-stimulus response report sealed DINO snapshot guard module digest algorithm is unsupported"
+            )
         for field in (
             "snapshotManifestSha256",
             "snapshotRepositorySha256",
             "snapshotWeightsSha256",
+            "snapshotGuardModuleSha256",
         ):
             _require_sha256(provenance[field], name=f"synthetic-stimulus response report sealed DINO provenance {field}")
     return identity

@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import importlib
+import importlib.machinery
 import json
 import os
 import stat
@@ -37,9 +38,10 @@ SNAPSHOT_WEIGHTS_FILENAME = "model_weights.pth"
 SNAPSHOT_ENTRYPOINT = "dinov2_vits14"
 MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 SEALED_DINO_FEATURE_EXTRACTOR_PROVENANCE_FIELD = "sealedDinoSnapshot"
-SEALED_DINO_FEATURE_EXTRACTOR_PROVENANCE_SCHEMA = "phone-dino.sealed-local-dino-feature-extractor-provenance/1.0"
+SEALED_DINO_FEATURE_EXTRACTOR_PROVENANCE_SCHEMA = "phone-dino.sealed-local-dino-feature-extractor-provenance/1.1"
 SEALED_DINO_REPOSITORY_DIGEST_ALGORITHM = "SEALED_REPOSITORY_CONTENT_SHA256_EXCLUDING_GIT_AND_PYTHON_BYTECODE_V1"
 SEALED_DINO_WEIGHTS_DIGEST_ALGORITHM = "REGULAR_FILE_BYTES_SHA256_V1"
+SEALED_DINO_SNAPSHOT_GUARD_MODULE_DIGEST_ALGORITHM = "REGULAR_FILE_BYTES_SHA256_V1"
 
 # ``sys.path``, ``sys.modules``, and ``sys.dont_write_bytecode`` are process
 # globals.  Keep one activation in control of them until it has verified and
@@ -61,6 +63,10 @@ _MANIFEST_FIELDS = {
 }
 _MANIFEST_FILE_FIELDS = {"relativePath", "sha256", "byteCount"}
 _CACHE_DIRECTORY_NAMES = frozenset({".git", "__pycache__"})
+_TORCH_HUB_DYNAMIC_NAMESPACE_DIRECTORIES = {
+    "dinov2.hub.cell_dino": PurePosixPath("dinov2/hub/cell_dino"),
+    "dinov2.hub.xray_dino": PurePosixPath("dinov2/hub/xray_dino"),
+}
 
 
 class SealedDinoSnapshotError(ValueError):
@@ -122,6 +128,12 @@ def sha256_file(path: Path) -> str:
 
     digest, _byte_count, _signature = _digest_regular_file(path, description="file")
     return digest
+
+
+def _snapshot_guard_module_sha256() -> str:
+    """Digest this guard's loaded source through the regular-file verifier."""
+
+    return sha256_file(Path(__file__))
 
 
 def sealed_repository_sha256(repository: Path) -> str:
@@ -366,9 +378,10 @@ class SealedDinoSnapshotActivation(AbstractContextManager["SealedDinoSnapshotAct
     """Temporarily prioritise one validated DINO source tree on ``sys.path``.
 
     The context refuses every preloaded ``dinov2`` module rather than trusting
-    mutable module metadata.  It verifies all DINO module origins and source
-    digests after each hub load and on exit, then removes only the verified
-    modules it loaded so a later activation starts from a clean import state.
+    mutable module metadata.  It verifies ordinary DINO source origins and
+    digests plus the two pinned PEP 420 torch-hub namespaces after each hub
+    load and on exit, then removes only the verified modules it loaded so a
+    later activation starts from a clean import state.
     ``sys.dont_write_bytecode`` is set for the active period and centralized
     bytecode caches are rejected before any snapshot import.
     """
@@ -388,12 +401,21 @@ class SealedDinoSnapshotActivation(AbstractContextManager["SealedDinoSnapshotAct
         self._inserted_path: str | None = None
         self._active = False
         self._lock_acquired = False
+        self._snapshot_guard_module_sha256: str | None = None
 
     @property
     def snapshot(self) -> SealedDinoSnapshot:
         if self._snapshot is None:
             raise SealedDinoSnapshotError("sealed DINO snapshot activation is not active")
         return self._snapshot
+
+    @property
+    def snapshot_guard_module_sha256(self) -> str:
+        """Return the guard source digest captured for this activation."""
+
+        if self._snapshot_guard_module_sha256 is None:
+            raise SealedDinoSnapshotError("sealed DINO snapshot activation is not active")
+        return self._snapshot_guard_module_sha256
 
     def __enter__(self) -> "SealedDinoSnapshotActivation":
         if self._active or self._lock_acquired:
@@ -403,6 +425,7 @@ class SealedDinoSnapshotActivation(AbstractContextManager["SealedDinoSnapshotAct
         try:
             _require_no_external_pycache_prefix()
             _reject_preloaded_dino_modules()
+            self._snapshot_guard_module_sha256 = _snapshot_guard_module_sha256()
             snapshot = load_sealed_dino_snapshot(
                 self._snapshot_directory,
                 expected_manifest_sha256=self._expected_manifest_sha256,
@@ -421,12 +444,30 @@ class SealedDinoSnapshotActivation(AbstractContextManager["SealedDinoSnapshotAct
         return self
 
     def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None:
+        cleanup_error: BaseException | None = None
         try:
             if self._active:
-                self.verify_integrity()
-                _remove_verified_loaded_dino_modules(self.snapshot)
+                try:
+                    self.verify_integrity()
+                    _remove_verified_loaded_dino_modules(self.snapshot)
+                except BaseException as error:
+                    cleanup_error = error
         finally:
             self._restore_process_state()
+        # Never hide the caller's operational exception behind a cleanup
+        # failure.  A failed cleanup deliberately leaves DINO modules in the
+        # import cache, so the next activation refuses that preloaded state.
+        if exc_type is not None and cleanup_error is not None:
+            if isinstance(exc_value, BaseException):
+                raise BaseExceptionGroup(
+                    "sealed DINO activation body and integrity cleanup both failed",
+                    [exc_value, cleanup_error],
+                )
+            raise cleanup_error
+        if exc_type is not None:
+            return None
+        if cleanup_error is not None:
+            raise cleanup_error
         return None
 
     def verify_integrity(self) -> None:
@@ -435,6 +476,8 @@ class SealedDinoSnapshotActivation(AbstractContextManager["SealedDinoSnapshotAct
         if not self._active or self._snapshot is None:
             raise SealedDinoSnapshotError("sealed DINO snapshot activation is not active")
         _require_no_external_pycache_prefix()
+        if not hmac.compare_digest(self.snapshot_guard_module_sha256, _snapshot_guard_module_sha256()):
+            raise SealedDinoSnapshotError("sealed DINO snapshot guard module changed during activation")
         current = load_sealed_dino_snapshot(
             self._snapshot.root,
             expected_manifest_sha256=self._expected_manifest_sha256,
@@ -480,6 +523,7 @@ class SealedDinoSnapshotActivation(AbstractContextManager["SealedDinoSnapshotAct
         self._inserted_path = None
         self._previous_dont_write_bytecode = None
         self._snapshot = None
+        self._snapshot_guard_module_sha256 = None
         if self._lock_acquired:
             self._lock_acquired = False
             _DINO_ACTIVATION_LOCK.release()
@@ -524,6 +568,8 @@ def sealed_snapshot_identity_factory(
             "repositoryDigestAlgorithm": SEALED_DINO_REPOSITORY_DIGEST_ALGORITHM,
             "snapshotWeightsSha256": active_snapshot.weights_sha256,
             "weightsDigestAlgorithm": SEALED_DINO_WEIGHTS_DIGEST_ALGORITHM,
+            "snapshotGuardModuleSha256": activation.snapshot_guard_module_sha256,
+            "snapshotGuardModuleDigestAlgorithm": SEALED_DINO_SNAPSHOT_GUARD_MODULE_DIGEST_ALGORITHM,
         }
         return bound
 
@@ -1237,20 +1283,114 @@ def _verify_loaded_dino_modules(snapshot: SealedDinoSnapshot) -> None:
     allowed = {record.relative_path.as_posix(): record.sha256 for record in _manifest_to_records(manifest["repositoryFiles"])}
     for name, module in _loaded_dino_module_items():
         module_path = getattr(module, "__file__", None)
-        if not isinstance(module_path, str) or not module_path:
-            raise SealedDinoSnapshotError(f"preloaded {name} has no verifiable source origin")
-        candidate = Path(module_path)
-        _reject_links_on_existing_path(candidate, description=f"preloaded {name}")
-        if not candidate.is_file() or _is_link_or_reparse_point(candidate):
-            raise SealedDinoSnapshotError(f"preloaded {name} is not a regular source file")
-        try:
-            resolved = candidate.resolve()
-            relative = resolved.relative_to(snapshot.repository).as_posix()
-        except (OSError, RuntimeError, ValueError) as error:
-            raise SealedDinoSnapshotError(f"preloaded {name} originates outside the sealed snapshot") from error
-        expected_digest = allowed.get(relative)
-        if expected_digest is None:
-            raise SealedDinoSnapshotError(f"preloaded {name} originates from an unmanifested snapshot file")
-        actual_digest = sha256_file(resolved)
-        if actual_digest != expected_digest:
-            raise SealedDinoSnapshotError(f"preloaded {name} source digest does not match the sealed snapshot")
+        if module_path is None:
+            _verify_torch_hub_dynamic_namespace_module(
+                name,
+                module,
+                snapshot=snapshot,
+                allowed=allowed,
+            )
+            continue
+        _verify_source_backed_dino_module(name, module, snapshot=snapshot, allowed=allowed)
+
+
+def _verify_source_backed_dino_module(
+    name: str,
+    module: Any,
+    *,
+    snapshot: SealedDinoSnapshot,
+    allowed: Mapping[str, str],
+) -> None:
+    """Prove one ordinary source-backed DINO module comes from the snapshot."""
+
+    module_path = getattr(module, "__file__", None)
+    if not isinstance(module_path, str) or not module_path:
+        raise SealedDinoSnapshotError(f"preloaded {name} has no verifiable source origin")
+    candidate = Path(module_path)
+    _reject_links_on_existing_path(candidate, description=f"preloaded {name}")
+    if not candidate.is_file() or _is_link_or_reparse_point(candidate):
+        raise SealedDinoSnapshotError(f"preloaded {name} is not a regular source file")
+    try:
+        resolved = candidate.resolve()
+        relative = resolved.relative_to(snapshot.repository).as_posix()
+    except (OSError, RuntimeError, ValueError) as error:
+        raise SealedDinoSnapshotError(f"preloaded {name} originates outside the sealed snapshot") from error
+    expected_digest = allowed.get(relative)
+    if expected_digest is None:
+        raise SealedDinoSnapshotError(f"preloaded {name} originates from an unmanifested snapshot file")
+    actual_digest = sha256_file(resolved)
+    if actual_digest != expected_digest:
+        raise SealedDinoSnapshotError(f"preloaded {name} source digest does not match the sealed snapshot")
+
+
+def _verify_torch_hub_dynamic_namespace_module(
+    name: str,
+    module: Any,
+    *,
+    snapshot: SealedDinoSnapshot,
+    allowed: Mapping[str, str],
+) -> None:
+    """Accept only the two PEP 420 namespaces imported by this pinned hubconf.
+
+    ``torch.hub`` imports the repository's ``hubconf.py`` under an anonymous
+    module and Python creates namespace packages for the cache-free Cell-DINO
+    and XRay-DINO directories.  Those packages intentionally have no
+    ``__file__``.  Activation starts from an empty ``dinov2`` import cache, so
+    this narrow structural proof binds the post-entry modules to the already
+    revalidated sealed repository without trusting mutable module metadata.
+    """
+
+    expected_relative = _TORCH_HUB_DYNAMIC_NAMESPACE_DIRECTORIES.get(name)
+    if expected_relative is None:
+        raise SealedDinoSnapshotError(f"preloaded {name} has no verifiable source origin")
+    if getattr(module, "__file__", None) is not None:
+        raise SealedDinoSnapshotError(f"preloaded {name} is not a torch hub namespace package")
+    spec = getattr(module, "__spec__", None)
+    if not isinstance(spec, importlib.machinery.ModuleSpec):
+        raise SealedDinoSnapshotError(f"preloaded {name} has no verifiable namespace specification")
+    loader = spec.loader
+    if not isinstance(loader, importlib.machinery.NamespaceLoader):
+        raise SealedDinoSnapshotError(f"preloaded {name} does not use the Python namespace loader")
+    locations = spec.submodule_search_locations
+    if (
+        spec.name != name
+        or spec.origin is not None
+        or spec.has_location
+        or locations is None
+        or getattr(module, "__package__", None) != name
+        or getattr(module, "__loader__", None) is not loader
+        or getattr(module, "__path__", None) is not locations
+        or getattr(module, "__cached__", None) is not None
+        or getattr(loader, "_path", None) is not locations
+    ):
+        raise SealedDinoSnapshotError(f"preloaded {name} has an unsafe namespace specification")
+    if isinstance(locations, (str, bytes)):
+        raise SealedDinoSnapshotError(f"preloaded {name} has an unsafe namespace search path")
+    try:
+        location_values = tuple(locations)
+    except TypeError as error:
+        raise SealedDinoSnapshotError(f"preloaded {name} has an unsafe namespace search path") from error
+    if len(location_values) != 1 or not isinstance(location_values[0], str) or not location_values[0]:
+        raise SealedDinoSnapshotError(f"preloaded {name} has an unsafe namespace search path")
+    expected_directory = snapshot.repository.joinpath(*expected_relative.parts)
+    _require_directory(expected_directory, description=f"preloaded {name} expected namespace directory")
+    expected_resolved = expected_directory.resolve()
+    candidate = Path(location_values[0])
+    _reject_links_on_existing_path(candidate, description=f"preloaded {name} namespace directory")
+    if not candidate.is_dir() or _is_link_or_reparse_point(candidate):
+        raise SealedDinoSnapshotError(f"preloaded {name} namespace directory is not a regular directory")
+    try:
+        if candidate.resolve() != expected_resolved:
+            raise SealedDinoSnapshotError(f"preloaded {name} namespace directory is not the sealed torch hub directory")
+    except (OSError, RuntimeError) as error:
+        raise SealedDinoSnapshotError(f"preloaded {name} namespace directory cannot be resolved safely") from error
+    namespace_prefix = expected_relative.as_posix() + "/"
+    if expected_relative.joinpath("__init__.py").as_posix() in allowed or not any(
+        relative.startswith(namespace_prefix) for relative in allowed
+    ):
+        raise SealedDinoSnapshotError(f"preloaded {name} is not backed by a sealed namespace source directory")
+    parent_name = name.rpartition(".")[0]
+    parent = sys.modules.get(parent_name)
+    if parent is None:
+        raise SealedDinoSnapshotError(f"preloaded {name} has no source-backed parent package")
+    _verify_source_backed_dino_module(parent_name, parent, snapshot=snapshot, allowed=allowed)

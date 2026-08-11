@@ -183,6 +183,8 @@ def _identity_factory(**_kwargs: object) -> dict[str, Any]:
         "snapshotManifestSha256": _digest("fixture-sealed-manifest"),
         "snapshotRepositorySha256": identity["modelRepositorySha256"],
         "snapshotWeightsSha256": identity["modelWeightsSha256"],
+        "snapshotGuardModuleSha256": _digest("fixture-sealed-snapshot-guard"),
+        "snapshotGuardModuleDigestAlgorithm": stress.sealed_snapshot.SEALED_DINO_SNAPSHOT_GUARD_MODULE_DIGEST_ALGORITHM,
     }
     return identity
 
@@ -466,11 +468,21 @@ def test_r2_json_contract_rejects_self_digested_semantic_mutations(
         "snapshotManifestSha256": _digest("sealed-manifest"),
         "snapshotRepositorySha256": _digest("sealed-repository-different-algorithm"),
         "snapshotWeightsSha256": _digest("sealed-weights-independent-pin"),
+        "snapshotGuardModuleSha256": _digest("sealed-guard-module"),
+        "snapshotGuardModuleDigestAlgorithm": stress.sealed_snapshot.SEALED_DINO_SNAPSHOT_GUARD_MODULE_DIGEST_ALGORITHM,
     }
     sealed_snapshot_report["featureExtractorIdentitySha256"] = stress.successor.canonical_json_sha256(
         sealed_snapshot_report["featureExtractor"]
     )
     assert stress.validate_response_only_report_v2_r2(resign(sealed_snapshot_report)) is sealed_snapshot_report
+
+    missing_guard_snapshot = deepcopy(sealed_snapshot_report)
+    del missing_guard_snapshot["featureExtractor"]["sealedDinoSnapshot"]["snapshotGuardModuleSha256"]
+    missing_guard_snapshot["featureExtractorIdentitySha256"] = stress.successor.canonical_json_sha256(
+        missing_guard_snapshot["featureExtractor"]
+    )
+    with pytest.raises(stress.SyntheticStressV2Error, match="missing snapshotGuardModuleSha256"):
+        stress.validate_response_only_report_v2_r2(resign(missing_guard_snapshot))
 
     wrong_sealed_snapshot = deepcopy(sealed_snapshot_report)
     wrong_sealed_snapshot["featureExtractor"]["sealedDinoSnapshot"]["weightsDigestAlgorithm"] = "UNPINNED"
@@ -479,6 +491,14 @@ def test_r2_json_contract_rejects_self_digested_semantic_mutations(
     )
     with pytest.raises(stress.SyntheticStressV2Error, match="weights digest algorithm is unsupported"):
         stress.validate_response_only_report_v2_r2(resign(wrong_sealed_snapshot))
+
+    wrong_guard_snapshot = deepcopy(sealed_snapshot_report)
+    wrong_guard_snapshot["featureExtractor"]["sealedDinoSnapshot"]["snapshotGuardModuleDigestAlgorithm"] = "UNPINNED"
+    wrong_guard_snapshot["featureExtractorIdentitySha256"] = stress.successor.canonical_json_sha256(
+        wrong_guard_snapshot["featureExtractor"]
+    )
+    with pytest.raises(stress.SyntheticStressV2Error, match="guard module digest algorithm is unsupported"):
+        stress.validate_response_only_report_v2_r2(resign(wrong_guard_snapshot))
 
 
 def test_response_report_writer_rejects_path_substitution_and_completes_partial_writes(

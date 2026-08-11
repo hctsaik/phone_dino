@@ -220,6 +220,8 @@ def _identity_factory(**_kwargs: object) -> dict[str, Any]:
         "snapshotManifestSha256": _digest("fixture-sealed-manifest"),
         "snapshotRepositorySha256": identity["modelRepositorySha256"],
         "snapshotWeightsSha256": identity["modelWeightsSha256"],
+        "snapshotGuardModuleSha256": _digest("fixture-sealed-snapshot-guard"),
+        "snapshotGuardModuleDigestAlgorithm": stress.sealed_snapshot.SEALED_DINO_SNAPSHOT_GUARD_MODULE_DIGEST_ALGORITHM,
     }
     return identity
 
