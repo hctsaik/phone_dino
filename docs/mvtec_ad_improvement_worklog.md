@@ -726,6 +726,53 @@ Do not loosen these gates retrospectively or automatically consume either
 partition. Any future iteration needs a newly pre-registered envelope and a
 clearer independence/evidence boundary.
 
+### Synthetic-only augmentation harness and test (2026-08-12)
+
+The separate [`synthetic-only protocol`](mvtec_ad_synthetic_anomaly_test_protocol.md)
+was added as an engineering test harness, not a successor-selection retry. It
+uses the already permitted successor V2 `FIT` normal bytes only; it does not
+open `THRESHOLD_TUNING`, `NORMAL_SELECTION`, `NORMAL_CONFIRMATION`, remaining
+reserve, blind, true-anomaly, or mask image bytes. It does not create a claim,
+receipt, observation, or lock in the V1/V2 selection registries and does not
+change the `NO_ELIGIBLE_CONFIGURATION` result above.
+
+Per category, the 12 FIT parents were deterministically split by immutable
+source identity into 6 raw prototype parents, 2 raw calibration parents, and
+4 query parents. Only the 12 query parents received three deterministic PNG
+stimuli (`LOCAL_SCRATCH`, `LOCAL_SPOT`, `LOCAL_OCCLUSION`), for 36 children
+total. All package children were byte-hashed and deterministically re-rendered
+before the test read them.
+
+| Artifact | File digest | Declared digest |
+| --- | --- | --- |
+| Synthetic-only package manifest | `sha256:789a9cd9289dd6d53573de99c61a0afe59c48fc69a1f6546e88a8c71d2ded4b7` | `sha256:a5d87ce8a1adb293a40d4f58556e2a2dbb2c31bebb3aac4acf183802aad3c5f6` |
+| Closed synthetic recipe | `sha256:935588502d295c939b5e042f99b4e276f83e5d2bbe7136a968f5d68bffe7252a` | same file digest |
+| Synthetic-only test report (`r2`) | `sha256:462b4599309c95456991e41ff19cc8fd24dcf54a94ae4c420eda639fb95dbde8` | `sha256:692292841d74e924d46f9bb618c850a9e7ec5a7824ff5e755d7d8b5bcd98d77d` |
+
+The fixed threshold for each category was the maximum score of its two raw
+calibration parents. The query result contains 12 raw-normal synthetic
+negatives and 36 rendered synthetic positives. Its **synthetic-only** outcome
+was:
+
+| Category | Synthetic TP / FP / FN / TN | Synthetic precision | Synthetic recall |
+| --- | --- | ---: | ---: |
+| capsule | 12 / 1 / 0 / 3 | 0.9231 | 1.0000 |
+| metal_nut | 12 / 1 / 0 / 3 | 0.9231 | 1.0000 |
+| tile | 12 / 2 / 0 / 2 | 0.8571 | 1.0000 |
+| aggregate | 36 / 4 / 0 / 8 | 0.9000 | 1.0000 |
+
+This is strictly `SYNTHETIC_RENDERING_DISCRIMINATION_ONLY`; its report states
+`realAnomalyPerformance: NOT_ESTIMATED` and forbids model selection, threshold
+selection, production validation, and physical qualification. The samples are
+small and paired by parent, so the displayed precision/recall says only that
+this DINO setup responds to these particular programmatic overlays. It is not
+a real-defect or physical-device precision/recall result.
+
+An earlier `r1` external diagnostic report included host-suspend time in a
+wall-clock field and is deliberately not used for this worklog entry. The
+recorded `r2` report uses process CPU time (66.30 seconds total) and completed
+with the same source/model identity and fixed test rule.
+
 ## Physical readiness audit (2026-08-09)
 
 The offline research result was not used as a substitute for a physical-device
