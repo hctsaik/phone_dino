@@ -882,6 +882,60 @@ hard-bound to this old successor evidence chain; a controlled recovery must
 use a separately designed and preregistered V4 protocol, not a new cohort
 through V3.
 
+### Recovery-V4 checkpoint — source foundation only (2026-08-12)
+
+This is a handoff checkpoint, not an authorization to acquire, render, score,
+or consume another image. The Recovery-V4 foundation is deliberately separate
+from the quarantined V3/successor lineage.
+
+The proposed source universe is pinned MVTec `train/good` data from previously
+unused categories `bottle`, `cable`, and `hazelnut`, at mirror revision
+`30a183a3b96e3aef953f230784b123b719b09d97`. The tracked policy selects 32
+metadata paths per category (96 total) using the exact UTF-8 rank input
+`PHONE_DINO_STRICT_V3_FRESH_COHORT_V1|revision|category|sourceRemotePath` and
+the `(rankDigestHex, sourceRemotePath)` order. Each category is preallocated
+to 6 prototype, 2 raw-calibration, 4 query, and 20 reserve records.
+
+| Recovery-V4 metadata artifact | Raw file digest | Declared/derived digest |
+| --- | --- | --- |
+| Source allowlist policy | `sha256:a3e0c8a5871aff6a198ef7c0d0d7cea02fcc869ccf0ceb14370d2dfc5a00c283` | `sha256:4a1f853dd2352973c1c769ac566fbc5cb01ffb44573086fe31b2f3c46b4dfc27` |
+| Ranked 96-candidate identity | — | `sha256:97bdb45d298c384f5d24cb0f78fcddb24a62d920cafef3620f8fff5a7fb17058` |
+| Fixed role-split identity | — | `sha256:cedbd9a9150f2346f87d6fb359b7a51a78f936a9743c0783807b3359ebcfd2b6` |
+| Full record identity | — | `sha256:ff673c0c527fe8aef29247e36f3515741c4e0734c69996010dbd26f7516b0afa` |
+
+The source foundation pins the existing 960-hash historical usage ledger
+(raw `sha256:fffa4b335044ecb10e749d67f195de727a639c73b3d8752d518f4ef9c084c3fc`,
+declared `sha256:38bedae2c856bdbb73d16863152bd9b5581b99dc74157648fdeb1cb8be430c10`,
+canonical list identity
+`sha256:08f6a802f4c9cb09a0f579c74a187c33f5bb6b6a2430cbcceee9b67415a37160`)
+and requires an exact union with all 477 records of the quarantined cohort.
+It prohibits directory discovery, archive download, test/anomaly/mask paths,
+and output inside the known quarantined root. The proposed acquisition stage
+is file-level HTTPS only, with pinned redirect revision, raw LFS SHA-256, and
+byte count checks.
+
+No Recovery-V4 source plan, remote resolve/download, source vault, cohort,
+augmentation package, query receipt, or V4 observation has been created. The
+foundation code and tests are a **work-in-progress checkpoint** pending final
+review and commit; do not run its acquisition command yet.
+
+The separate receipt-authority foundation also remains intentionally
+non-operational. It has no approved Ed25519 provider in the current virtual
+environment and no provisioned external append-only/mTLS authority. Its
+current production admission path needs three fixes before it can be used:
+authority-capability spoofing via a string, replay of a valid receipt, and
+late verifier availability checking that could burn a receipt. Until those
+issues are corrected and independently re-reviewed, all Recovery-V4 query
+access must fail before opening a query image. A local filesystem receipt or
+test fake is not equivalent to the required external authority.
+
+For continuation, start with the two Recovery-V4 documents and their focused
+tests, fix the receipt P1 issues before any source acquisition, then review
+the source foundation again. A stronger claim than tool-mediated no-overlap
+requires an independent acquisition broker/service account, protected source
+vault, signed append-only receipt authority, and audit log; same-user Windows
+ACLs cannot establish a human-unseen boundary.
+
 ## Physical readiness audit (2026-08-09)
 
 The offline research result was not used as a substitute for a physical-device
